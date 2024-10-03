@@ -34,7 +34,7 @@ class SoundAnalyzer extends StatefulWidget {
 class _SoundAnalyzerState extends State<SoundAnalyzer> {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   final FlutterFft _flutterFft = FlutterFft();
-  final speechToText = SpeechToText.viaApiKey("AIzaSyDx5fZpE0z1QxYV7mwN1cvxig7tUvzw4Xc");
+  final speechToText = SpeechToText.viaApiKey("");
   final config = RecognitionConfig(
     encoding: AudioEncoding.LINEAR16,
     model: RecognitionModel.basic,
