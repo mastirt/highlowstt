@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
-import 'package:flutter_fft/flutter_fft.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'dart:async';
@@ -33,7 +32,6 @@ class SoundAnalyzer extends StatefulWidget {
 
 class _SoundAnalyzerState extends State<SoundAnalyzer> {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
-  final FlutterFft _flutterFft = FlutterFft();
   final speechToText = SpeechToText.viaApiKey("");
   final config = RecognitionConfig(
     encoding: AudioEncoding.LINEAR16,
@@ -43,12 +41,10 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     languageCode: 'id-ID',
   );
   bool _isRecording = false;
-  double _frequency = 0.0;
   double _amplitude = 0.0;
   double _decibel = 0.0;
   bool _isAmplitudeHigh = false;
   bool _isAmplitudeLow = false;
-  StreamSubscription? _subscription;
   Timer? _recordingTimer;
   String? _filePath;
   String? _comparisonResult;
@@ -85,14 +81,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     } catch (e) {
       print('Error in starting recorder: $e');
     }
-
-    await _flutterFft.startRecorder();
-
-    _subscription = _flutterFft.onRecorderStateChanged.listen((data) {
-      setState(() {
-        _frequency = double.tryParse(data[1].toString()) ?? 0.0;
-      });
-    });
 
     _recorder.onProgress!.listen((event) {
       if (event.decibels != null) {
@@ -175,8 +163,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
 
   Future<void> _restartRecording() async {
     await _recorder.stopRecorder();
-    await _flutterFft.stopRecorder();
-    _subscription?.cancel();
 
     if (_filePath != null) {
       final file = File(_filePath!);
@@ -194,21 +180,11 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
       toFile: _filePath,
       codec: Codec.pcm16WAV,
     );
-
-    await _flutterFft.startRecorder();
-
-    _subscription = _flutterFft.onRecorderStateChanged.listen((data) {
-      setState(() {
-        _frequency = double.tryParse(data[1].toString()) ?? 0.0;
-      });
-    });
   }
 
   Future<void> _stopRecording() async {
     _recordingTimer?.cancel();
     await _recorder.stopRecorder();
-    await _flutterFft.stopRecorder();
-    _subscription?.cancel();
 
     setState(() {
       _isRecording = false;
@@ -240,10 +216,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Text(
-              'Frekuensi: ${_frequency.toStringAsFixed(2)} Hz',
-              style: TextStyle(fontSize: 20),
-            ),
             SizedBox(height: 20),
             Text(
               'Amplitudo: ${_amplitude.toStringAsFixed(2)}',
