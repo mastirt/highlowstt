@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:path_provider/path_provider.dart';
@@ -7,6 +8,8 @@ import 'package:path/path.dart' as path;
 import 'dart:async';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:google_speech/google_speech.dart';
+import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
+import 'package:fftea/fftea.dart';
 
 void main() {
   runApp(MyApp());
@@ -32,7 +35,7 @@ class SoundAnalyzer extends StatefulWidget {
 
 class _SoundAnalyzerState extends State<SoundAnalyzer> {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
-  final speechToText = SpeechToText.viaApiKey("");
+  final speechToText = SpeechToText.viaApiKey("AIzaSyDx5fZpE0z1QxYV7mwN1cvxig7tUvzw4Xc");
   final config = RecognitionConfig(
     encoding: AudioEncoding.LINEAR16,
     model: RecognitionModel.basic,
@@ -41,6 +44,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     languageCode: 'id-ID',
   );
   bool _isRecording = false;
+  double _frequency = 0.0;
   double _amplitude = 0.0;
   double _decibel = 0.0;
   bool _isAmplitudeHigh = false;
@@ -48,6 +52,11 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
   Timer? _recordingTimer;
   String? _filePath;
   String? _comparisonResult;
+  // double _similarity = 0.0;
+  // bool _isComparing = false;
+  // int _currentSampleIndex = 0;
+  // List<String?> _sampleFilePaths = [null, null, null];
+  // List<List<double>?> _sampleMFCCs = [null, null, null];
 
   @override
   void initState() {
@@ -66,6 +75,336 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     _recorder.setSubscriptionDuration(Duration(milliseconds: 2000));
   }
 
+  Future<String> _getSampleFilePath(int index) async {
+    final appDocDir = await getApplicationDocumentsDirectory();
+    return '${appDocDir.path}/sample_suara_$index.aac';
+  }
+
+  Future<String> _extractWaveform(String inputPath) async {
+    String outputPath = '${inputPath}_waveform.pcm';
+    String command = '-y -i "$inputPath" -ar 16000 -ac 1 -f s16le "$outputPath"';
+
+    await FFmpegKit.execute(command).then((session) async {
+      final returnCode = await session.getReturnCode();
+      if (returnCode != null && returnCode.isValueSuccess()) {
+        print('Waveform extracted successfully for $inputPath');
+      } else {
+        final output = await session.getOutput();
+        print('Error extracting waveform: $output');
+      }
+    });
+
+    return outputPath;
+  }
+
+  Future<Map<String, dynamic>> _loadAndAnalyzeAudio(String filePath) async {
+
+    File file = File(filePath);
+    Uint8List audioData = await file.readAsBytes();
+
+    // Convert Uint8List to List<int> (assuming 16-bit PCM)
+    List<int> audioListInt = [];
+    for (int i = 0; i < audioData.length; i += 2) {
+      int value = (audioData[i + 1] << 8) | audioData[i];
+      if (value >= 0x8000) value -= 0x10000;
+      audioListInt.add(value);
+    }
+
+    // Convert to List<double>
+    List<double> audioList = audioListInt.map((e) => e.toDouble()).toList();
+
+    // Remove DC component (mean removal)
+    double mean = audioList.reduce((a, b) => a + b) / audioList.length;
+    audioList = audioList.map((v) => v - mean).toList();
+
+    // Normalize amplitude
+    double maxAbsVal = audioList.map((v) => v.abs()).reduce((a, b) => a > b ? a : b);
+    if (maxAbsVal > 0) {
+      audioList = audioList.map((v) => v / maxAbsVal).toList();
+    }
+
+    // FFT
+    final fft = FFT(audioList.length);
+    final freqs = fft.realFft(audioList);
+
+    // Calculate spectral magnitude
+    List<double> freqsDouble = freqs.map((f) => sqrt(f.x * f.x + f.y * f.y)).toList();
+    double maxAmplitude = freqsDouble.reduce((curr, next) => curr.abs() > next.abs() ? curr : next);
+    int maxFreqIndex = freqsDouble.indexOf(maxAmplitude);
+
+    // Calculate dominant frequency
+    double dominantFreq = (maxFreqIndex * 16000) / (audioList.length / 2); // Divide by 2 because of FFT symmetry
+
+    // Set a minimum amplitude value to avoid zero or too small values
+    double minAmplitude = 1e-10;
+    maxAmplitude = maxAmplitude.abs();
+    if (maxAmplitude < minAmplitude) {
+      maxAmplitude = minAmplitude;
+    }
+
+    // Calculate decibel
+    double decibel = 20 * log(maxAmplitude) / log(10);
+
+    List<double>? sampleMFCC;
+    String pcmPath = await _extractWaveform(filePath);
+    final audioBytes = await _getAudioBytes(pcmPath);
+    sampleMFCC = computeMFCC(audioBytes, 16000, 13);
+
+    // Print calculated MFCCs
+    print('MFCCs for $filePath: $sampleMFCC');
+
+    return {
+      'frequency': dominantFreq,
+      'amplitude': maxAmplitude,
+      'decibel': decibel,
+      'mfccs': sampleMFCC,
+    };
+  }
+
+  Future<List<int>> _getAudioBytes(String filePath) async {
+    final audioFile = File(filePath);
+    if (!await audioFile.exists()) {
+      throw Exception("Audio file not found at path: $filePath");
+    }
+    final audioData = await audioFile.readAsBytes();
+    return audioData;
+  }
+
+  List<double> normalizeAudioData(List<int> audioBytes) {
+    List<double> normalizedData = [];
+    for (int i = 0; i < audioBytes.length - 1; i += 2) {
+      int sample = audioBytes[i] | (audioBytes[i + 1] << 8);
+      if (sample > 32767) sample -= 65536;
+      normalizedData.add(sample / 32768.0);
+    }
+
+    if (normalizedData.every((sample) => sample == 0)) {
+      throw Exception("Audio normalization failed. All samples are zero.");
+    }
+
+    return normalizedData;
+  }
+
+  List<Float64List> melFilterbank(int numFilters, int fftSize, int sampleRate) {
+    // Helper function to convert frequency to Mel scale
+    double hzToMel(double hz) {
+      return 2595 * log(1 + hz / 700) / ln10; // Convert Hz to Mel scale
+    }
+
+    // Helper function to convert Mel scale to frequency
+    double melToHz(double mel) {
+      return 700 * (pow(10, mel / 2595) - 1); // Convert Mel scale to Hz
+    }
+
+    // Create filterbank
+    var melFilters = List<Float64List>.generate(numFilters, (i) => Float64List(fftSize ~/ 2 + 1));
+
+    // Define the low and high frequency limits
+    double lowFreqMel = hzToMel(0); // Lowest frequency (0 Hz)
+    double highFreqMel = hzToMel(sampleRate / 2); // Nyquist frequency (half of sample rate)
+
+    // Compute equally spaced Mel points
+    var melPoints = List<double>.generate(numFilters + 2, (i) {
+      return lowFreqMel + i * (highFreqMel - lowFreqMel) / (numFilters + 1);
+    });
+
+    // Convert Mel points back to Hz
+    var hzPoints = melPoints.map(melToHz).toList();
+
+    // Convert Hz points to FFT bin numbers
+    var binPoints = hzPoints.map((hz) {
+      return ((fftSize + 1) * hz / sampleRate).floor();
+    }).toList();
+
+    // Fill the Mel filterbank with triangular filters
+    for (int i = 1; i < numFilters + 1; i++) {
+      for (int j = binPoints[i - 1]; j < binPoints[i]; j++) {
+        melFilters[i - 1][j] = (j - binPoints[i - 1]) / (binPoints[i] - binPoints[i - 1]);
+      }
+      for (int j = binPoints[i]; j < binPoints[i + 1]; j++) {
+        melFilters[i - 1][j] = (binPoints[i + 1] - j) / (binPoints[i + 1] - binPoints[i]);
+      }
+    }
+
+    return melFilters;
+  }
+
+  List<double> applyMelFilterbank(List<double> stftFrame, List<Float64List> melFilters) {
+    var melEnergies = List<double>.filled(melFilters.length, 0.0);
+
+    for (int i = 0; i < melFilters.length; i++) {
+      melEnergies[i] = dot(melFilters[i], stftFrame);
+    }
+
+    return melEnergies;
+  }
+
+  /// Fungsi Dot Product
+  double dot(List<double> vectorA, List<double> vectorB) {
+    if (vectorA.length != vectorB.length) {
+      throw Exception('Vector lengths must be equal for dot product');
+    }
+
+    double result = 0.0;
+    for (int i = 0; i < vectorA.length; i++) {
+      result += vectorA[i] * vectorB[i];
+    }
+    return result;
+  }
+
+  /// Fungsi DCT (Discrete Cosine Transform)
+  List<double> dct(List<double> input, int numCoefficients) {
+    int N = input.length;
+    List<double> output = List<double>.filled(numCoefficients, 0.0);
+
+    for (int k = 0; k < numCoefficients; k++) {
+      double sum = 0.0;
+      for (int n = 0; n < N; n++) {
+        sum += input[n] * cos((pi / N) * (n + 0.5) * k);
+      }
+      output[k] = sum;
+    }
+
+    return output;
+  }
+
+  List<double> computeMFCC(List<int> audioBytes, int sampleRate, int numCoefficients) {
+    var audioSignal = normalizeAudioData(audioBytes);
+
+    final chunkSize = 512;
+    final stft = STFT(chunkSize, Window.hanning(chunkSize));
+    final spectrogram = <Float64List>[];
+
+    stft.run(audioSignal, (Float64x2List freq) {
+      final magnitudes = freq.discardConjugates().magnitudes();
+      spectrogram.add(magnitudes);
+    });
+
+    var melFilters = melFilterbank(26, chunkSize, sampleRate);
+    var melSpectrogram = <List<double>>[];
+    for (var frame in spectrogram) {
+      var melEnergies = applyMelFilterbank(frame, melFilters);
+      melSpectrogram.add(melEnergies);
+    }
+
+    for (var i = 0; i < melSpectrogram.length; i++) {
+      for (var j = 0; j < melSpectrogram[i].length; j++) {
+        melSpectrogram[i][j] = log(melSpectrogram[i][j] + 1e-10);
+      }
+    }
+
+    var mfccList = <double>[];
+    for (var frame in melSpectrogram) {
+      var dctCoeffs = dct(frame, numCoefficients);
+      mfccList.addAll(dctCoeffs);
+    }
+
+    return mfccList;
+  }
+
+  Future<Map<String, dynamic>> extractAudioFeatures(String filePath) async {
+    // Read the file
+    File file = File(filePath);
+    Uint8List audioData = await file.readAsBytes();
+
+    // Convert Uint8List to List<int> (assuming 16-bit PCM)
+    List<int> audioListInt = [];
+    for (int i = 0; i < audioData.length; i += 2) {
+      int value = (audioData[i + 1] << 8) | audioData[i];
+      if (value >= 0x8000) value -= 0x10000;
+      audioListInt.add(value);
+    }
+
+    // Convert to List<double>
+    List<double> audioList = audioListInt.map((e) => e.toDouble()).toList();
+
+    // Remove DC component (mean removal)
+    double mean = audioList.reduce((a, b) => a + b) / audioList.length;
+    audioList = audioList.map((v) => v - mean).toList();
+
+    // Normalize amplitude
+    double maxAbsVal = audioList.map((v) => v.abs()).reduce((a, b) => a > b ? a : b);
+    if (maxAbsVal > 0) {
+      audioList = audioList.map((v) => v / maxAbsVal).toList();
+    }
+
+    // FFT to calculate dominant frequency
+    final fft = FFT(audioList.length);
+    final freqs = fft.realFft(audioList);
+
+    // Spectral magnitude
+    List<double> freqsDouble = freqs.map((f) => sqrt(f.x * f.x + f.y * f.y)).toList();
+    double maxAmplitude = freqsDouble.reduce((curr, next) => curr.abs() > next.abs() ? curr : next);
+    int maxFreqIndex = freqsDouble.indexOf(maxAmplitude);
+
+    // Dominant frequency calculation
+    double dominantFreq = (maxFreqIndex * 16000) / (audioList.length / 2); // Divide by 2 for FFT symmetry
+
+    // Decibel calculation
+    double minAmplitude = 1e-10;
+    maxAmplitude = maxAmplitude.abs();
+    if (maxAmplitude < minAmplitude) {
+      maxAmplitude = minAmplitude;
+    }
+    double decibel = 20 * log(maxAmplitude) / log(10);
+
+    // MFCC Calculation (13 coefficients as an example)
+    String pcmPath = await _extractWaveform(filePath);
+    final audioBytes = await _getAudioBytes(pcmPath);
+    List<double> sampleMFCC = computeMFCC(audioBytes, 16000, 13);
+
+    // Return the extracted features as a map
+    return {
+      'frequency': dominantFreq,
+      'amplitude': maxAmplitude,
+      'decibel': decibel,
+      'mfcc': sampleMFCC,
+    };
+  }
+
+  // Future<void> _recordSample() async {
+  //   if (_currentSampleIndex >= 3) {
+  //     setState(() {
+  //       _comparisonResult = "Semua sampel telah direkam. Mulai perbandingan real-time.";
+  //     });
+  //     return;
+  //   }
+
+  //   final filePath = await _getSampleFilePath(_currentSampleIndex);
+
+  //   if (_recorder.isRecording) {
+  //     await _recorder.stopRecorder();
+  //   }
+
+  //   await _recorder.startRecorder(
+  //     toFile: filePath,
+  //     codec: Codec.aacADTS,
+  //   );
+
+  //   setState(() {
+  //     _isRecording = true;
+  //     _comparisonResult = "Merekam sample suara ${_currentSampleIndex + 1}...";
+  //   });
+
+  //   await Future.delayed(const Duration(seconds: 2));
+  //   await _recorder.stopRecorder();
+
+  //   String pcmPath = await _extractWaveform(filePath);
+  //   final audioBytes = await _getAudioBytes(pcmPath);
+  //   _sampleMFCCs[_currentSampleIndex] = computeMFCC(audioBytes, 16000, 13);
+
+  //   setState(() {
+  //     _isRecording = false;
+  //     _sampleFilePaths[_currentSampleIndex] = filePath;
+  //     _currentSampleIndex++;
+  //     if (_currentSampleIndex < 3) {
+  //       _comparisonResult = "Sample suara ${_currentSampleIndex} berhasil direkam. Silakan rekam sample berikutnya.";
+  //     } else {
+  //       _comparisonResult = "Semua sample suara berhasil direkam. Mulai perbandingan real-time.";
+  //     }
+  //   });
+  // }
+
   Future<void> _startRecording() async {
     final directory = await getExternalStorageDirectory();
     _filePath = '${directory?.path}/audio_streaming.wav';
@@ -75,28 +414,30 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
       await _recorder.startRecorder(
         toFile: _filePath,
         codec: Codec.pcm16WAV,
-        // sampleRate: 16000,
-        // numChannels: 1,
       );
     } catch (e) {
       print('Error in starting recorder: $e');
     }
 
-    _recorder.onProgress!.listen((event) {
-      if (event.decibels != null) {
+    _recorder.onProgress!.listen((event) async {
+      if (_filePath != null) {
+        // Extract features
+        Map<String, dynamic> features = await extractAudioFeatures(_filePath!);
+
         setState(() {
-          _amplitude = pow(10, (event.decibels! / 20)) as double;
-          _decibel = event.decibels!;
+          _frequency = features['frequency'];
+          _amplitude = features['amplitude'];
+          _decibel = features['decibel'];
+          List<double> mfcc = features['mfcc'];
 
           _isAmplitudeHigh = _amplitude > 1000;
           _isAmplitudeLow = _amplitude >= 50 && _amplitude <= 100;
 
           if (_isAmplitudeHigh || _isAmplitudeLow) {
-            print('==================================');
             if (_isAmplitudeHigh) {
               print('Amplitude tinggi terdeteksi.');
             }
-            
+
             if (_isAmplitudeLow) {
               print('Amplitude rendah terdeteksi.');
             }
@@ -115,6 +456,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     });
   }
 
+
   Future<List<int>> _getAudioContent(String path) async {
     return File(path).readAsBytesSync().toList();
   }
@@ -126,10 +468,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
         final newPath = path.join(directory!.path, 'processed_audio.wav');
         final File sourceFile = File(_filePath!);
         final File destinationFile = File(newPath);
-        print('Source Path: ${sourceFile}');
-        print('File Path: ${_filePath}');
-        print('Directory Path: ${directory}');
-        print('New Path: ${newPath}');
 
         if (await sourceFile.exists()) {
           await sourceFile.copy(destinationFile.path);
@@ -145,6 +483,8 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
 
           if (detectedText.contains('tolong') || detectedText.contains('help')) {
             print('Terdeteksi kata: $detectedText');
+            // Melakukan Matching suara realtime
+
             setState(() {
               _comparisonResult = "Terdeteksi kata: $detectedText";
             });
@@ -183,9 +523,20 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
   }
 
   Future<void> _stopRecording() async {
+    // Cancel the recording timer
     _recordingTimer?.cancel();
-    await _recorder.stopRecorder();
 
+    // Stop the recorder and ensure it has finished stopping before updating the state
+    try {
+      if (_recorder.isRecording) {
+        await _recorder.stopRecorder();  // Await for the recorder to stop
+        print('Recording stopped.');
+      }
+    } catch (e) {
+      print('Error stopping recorder: $e');
+    }
+
+    // Update the state after the recorder is stopped
     setState(() {
       _isRecording = false;
       _isAmplitudeHigh = false;
@@ -216,6 +567,16 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            // if (_isRecording) const Text("Recording..."),
+            // ElevatedButton(
+            //   onPressed: _isRecording ? null : _recordSample,
+            //   child: Text('Rekam Sample ${_currentSampleIndex + 1}'),
+            // ),
+            SizedBox(height: 20),
+            Text(
+              'Frekuensi: ${_frequency.toStringAsFixed(2)}',
+              style: TextStyle(fontSize: 20),
+            ),
             SizedBox(height: 20),
             Text(
               'Amplitudo: ${_amplitude.toStringAsFixed(2)}',
