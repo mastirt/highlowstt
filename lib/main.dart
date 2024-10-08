@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
@@ -10,6 +11,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:google_speech/google_speech.dart';
 import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
 import 'package:fftea/fftea.dart';
+import 'package:xml/xml.dart' as xml;
 
 void main() {
   runApp(MyApp());
@@ -52,11 +54,9 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
   Timer? _recordingTimer;
   String? _filePath;
   String? _comparisonResult;
-  // double _similarity = 0.0;
-  // bool _isComparing = false;
-  // int _currentSampleIndex = 0;
-  // List<String?> _sampleFilePaths = [null, null, null];
-  // List<List<double>?> _sampleMFCCs = [null, null, null];
+  Map<String, dynamic> _copy_features = {};
+  List<Map<String, dynamic>> nearestNeighbors = [];
+  String majorityLabel = '';
 
   @override
   void initState() {
@@ -73,11 +73,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     }
     await _recorder.openRecorder();
     _recorder.setSubscriptionDuration(Duration(milliseconds: 2000));
-  }
-
-  Future<String> _getSampleFilePath(int index) async {
-    final appDocDir = await getApplicationDocumentsDirectory();
-    return '${appDocDir.path}/sample_suara_$index.aac';
   }
 
   Future<String> _extractWaveform(String inputPath) async {
@@ -97,70 +92,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     return outputPath;
   }
 
-  Future<Map<String, dynamic>> _loadAndAnalyzeAudio(String filePath) async {
-
-    File file = File(filePath);
-    Uint8List audioData = await file.readAsBytes();
-
-    // Convert Uint8List to List<int> (assuming 16-bit PCM)
-    List<int> audioListInt = [];
-    for (int i = 0; i < audioData.length; i += 2) {
-      int value = (audioData[i + 1] << 8) | audioData[i];
-      if (value >= 0x8000) value -= 0x10000;
-      audioListInt.add(value);
-    }
-
-    // Convert to List<double>
-    List<double> audioList = audioListInt.map((e) => e.toDouble()).toList();
-
-    // Remove DC component (mean removal)
-    double mean = audioList.reduce((a, b) => a + b) / audioList.length;
-    audioList = audioList.map((v) => v - mean).toList();
-
-    // Normalize amplitude
-    double maxAbsVal = audioList.map((v) => v.abs()).reduce((a, b) => a > b ? a : b);
-    if (maxAbsVal > 0) {
-      audioList = audioList.map((v) => v / maxAbsVal).toList();
-    }
-
-    // FFT
-    final fft = FFT(audioList.length);
-    final freqs = fft.realFft(audioList);
-
-    // Calculate spectral magnitude
-    List<double> freqsDouble = freqs.map((f) => sqrt(f.x * f.x + f.y * f.y)).toList();
-    double maxAmplitude = freqsDouble.reduce((curr, next) => curr.abs() > next.abs() ? curr : next);
-    int maxFreqIndex = freqsDouble.indexOf(maxAmplitude);
-
-    // Calculate dominant frequency
-    double dominantFreq = (maxFreqIndex * 16000) / (audioList.length / 2); // Divide by 2 because of FFT symmetry
-
-    // Set a minimum amplitude value to avoid zero or too small values
-    double minAmplitude = 1e-10;
-    maxAmplitude = maxAmplitude.abs();
-    if (maxAmplitude < minAmplitude) {
-      maxAmplitude = minAmplitude;
-    }
-
-    // Calculate decibel
-    double decibel = 20 * log(maxAmplitude) / log(10);
-
-    List<double>? sampleMFCC;
-    String pcmPath = await _extractWaveform(filePath);
-    final audioBytes = await _getAudioBytes(pcmPath);
-    sampleMFCC = computeMFCC(audioBytes, 16000, 13);
-
-    // Print calculated MFCCs
-    print('MFCCs for $filePath: $sampleMFCC');
-
-    return {
-      'frequency': dominantFreq,
-      'amplitude': maxAmplitude,
-      'decibel': decibel,
-      'mfccs': sampleMFCC,
-    };
-  }
-
   Future<List<int>> _getAudioBytes(String filePath) async {
     final audioFile = File(filePath);
     if (!await audioFile.exists()) {
@@ -178,9 +109,9 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
       normalizedData.add(sample / 32768.0);
     }
 
-    if (normalizedData.every((sample) => sample == 0)) {
-      throw Exception("Audio normalization failed. All samples are zero.");
-    }
+    // if (normalizedData.every((sample) => sample == 0)) {
+    //   throw Exception("Audio normalization failed. All samples are zero.");
+    // }
 
     return normalizedData;
   }
@@ -362,48 +293,137 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     };
   }
 
-  // Future<void> _recordSample() async {
-  //   if (_currentSampleIndex >= 3) {
-  //     setState(() {
-  //       _comparisonResult = "Semua sampel telah direkam. Mulai perbandingan real-time.";
-  //     });
-  //     return;
-  //   }
+  // Function to load features from XML file
+  Future<List<Map<String, dynamic>>> loadFeaturesFromXml() async {
+    // Load the XML file from assets
+    final xmlString = await rootBundle.loadString('assets/xFeature.xml');
 
-  //   final filePath = await _getSampleFilePath(_currentSampleIndex);
+    // Parse the XML content
+    final xmlDoc = xml.XmlDocument.parse(xmlString);
 
-  //   if (_recorder.isRecording) {
-  //     await _recorder.stopRecorder();
-  //   }
+    List<Map<String, dynamic>> audioStore = [];
 
-  //   await _recorder.startRecorder(
-  //     toFile: filePath,
-  //     codec: Codec.aacADTS,
-  //   );
+    // Extract data from the XML
+    for (var audioElement in xmlDoc.findAllElements('Audio')) {
+      String label = audioElement.findElements('Label').first.text;
+      double frequency = double.parse(audioElement.findElements('Frequency').first.text);
+      double amplitude = double.parse(audioElement.findElements('Amplitude').first.text);
+      double decibel = double.parse(audioElement.findElements('Decibel').first.text);
+      List<double> mfccs = audioElement.findElements('MFCC')
+          .map((e) => double.parse(e.text))
+          .toList();
 
-  //   setState(() {
-  //     _isRecording = true;
-  //     _comparisonResult = "Merekam sample suara ${_currentSampleIndex + 1}...";
-  //   });
+      audioStore.add({
+        'label': label,
+        'features': {
+          'frequency': frequency,
+          'amplitude': amplitude,
+          'decibel': decibel,
+          'mfccs': mfccs,
+        }
+      });
+    }
+    return audioStore;
+  }
 
-  //   await Future.delayed(const Duration(seconds: 2));
-  //   await _recorder.stopRecorder();
+  // Add this function to calculate Euclidean Distance
+  double _euclideanDistance(List<double> vector1, List<double> vector2) {
+    // Tentukan panjang minimum antara kedua vektor
+    int minLength = min(vector1.length, vector2.length);
 
-  //   String pcmPath = await _extractWaveform(filePath);
-  //   final audioBytes = await _getAudioBytes(pcmPath);
-  //   _sampleMFCCs[_currentSampleIndex] = computeMFCC(audioBytes, 16000, 13);
+    // Potong kedua vektor sesuai panjang minimum
+    List<double> trimmedVector1 = vector1.sublist(0, minLength);
+    List<double> trimmedVector2 = vector2.sublist(0, minLength);
 
-  //   setState(() {
-  //     _isRecording = false;
-  //     _sampleFilePaths[_currentSampleIndex] = filePath;
-  //     _currentSampleIndex++;
-  //     if (_currentSampleIndex < 3) {
-  //       _comparisonResult = "Sample suara ${_currentSampleIndex} berhasil direkam. Silakan rekam sample berikutnya.";
-  //     } else {
-  //       _comparisonResult = "Semua sample suara berhasil direkam. Mulai perbandingan real-time.";
-  //     }
-  //   });
-  // }
+    double sum = 0.0;
+    for (int i = 0; i < minLength; i++) {
+      sum += pow(trimmedVector1[i] - trimmedVector2[i], 2);
+    }
+    return sqrt(sum);
+  }
+
+  Future<void> _compareAudioFiles() async {
+    try {
+      // Load stored audio features from assets XML
+      List<Map<String, dynamic>> storedAudios = await loadFeaturesFromXml();
+      // print('tampilkan data: $_copy_features');
+      // print('tampilkan XML: $storedAudios');
+
+      // Buat vektor fitur untuk audio baru dan pastikan semua data tersedia
+      // if (_copy_features['frequency'] == null ||
+      //     _copy_features['amplitude'] == null ||
+      //     _copy_features['decibel'] == null ||
+      //     _copy_features['mfcc'] == null ||
+      //       (_copy_features['mfcc'] as List).isEmpty) {
+      //   print("Error: copy_features data is incomplete");
+      //   return;
+      // }
+
+      List<double> newFeatures = [
+        _copy_features['frequency'] ?? 0.0,
+        _copy_features['amplitude'] ?? 0.0,
+        _copy_features['decibel'] ?? 0.0,
+        ...?_copy_features['mfcc']
+      ];
+
+      // Pastikan newFeatures tidak kosong
+      if (newFeatures.isEmpty) {
+        print("Error: newFeatures vector is empty.");
+        return;
+      }
+
+      // Hitung jarak Euclidean untuk setiap audio yang disimpan
+      List<Map<String, dynamic>> distances = [];
+      for (var audioData in storedAudios) {
+        if (audioData['features']?['frequency'] == null ||
+            audioData['features']?['amplitude'] == null ||
+            audioData['features']?['decibel'] == null ||
+            audioData['features']?['mfccs'] == null) {
+          print("Error: Stored audio data is incomplete.");
+          continue;
+        }
+
+        List<double> storeFeatures = [
+          audioData['features']['frequency'] ?? 0.0,
+          audioData['features']['amplitude'] ?? 0.0,
+          audioData['features']['decibel'] ?? 0.0,
+          ...?audioData['features']['mfccs']
+        ];
+
+        double distance = _euclideanDistance(newFeatures, storeFeatures);
+        distances.add({'label': audioData['label'], 'distance': distance});
+      }
+
+      // if (distances.isEmpty) {
+      //   print("Error: No valid distances calculated.");
+      //   return;
+      // }
+
+      distances.sort((a, b) => a['distance'].compareTo(b['distance']));
+
+      // Pilih 3 tetangga terdekat
+      List<Map<String, dynamic>> nearestNeighbors = distances.sublist(0, min(3, distances.length));
+
+      // Voting untuk klasifikasi berdasarkan tetangga terdekat
+      Map<String, int> voteCount = {};
+      for (var neighbor in nearestNeighbors) {
+        String label = neighbor['label'];
+        voteCount[label] = (voteCount[label] ?? 0) + 1;
+      }
+
+      String majorityLabel = voteCount.entries.reduce((a, b) => a.value > b.value ? a : b).key;
+
+      print('Matching Audio: Suara aku, Jarak terdekat: $nearestNeighbors');
+      print('Hasil matching: $majorityLabel');
+
+      setState(() {
+        this.nearestNeighbors = nearestNeighbors;
+        this.majorityLabel = majorityLabel;
+      });
+    } catch (e) {
+      print("Error comparing audio files: $e");
+    }
+  }
 
   Future<void> _startRecording() async {
     final directory = await getExternalStorageDirectory();
@@ -422,16 +442,17 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     _recorder.onProgress!.listen((event) async {
       if (_filePath != null) {
         // Extract features
-        Map<String, dynamic> features = await extractAudioFeatures(_filePath!);
+        Map<String, dynamic> realtime_features = await extractAudioFeatures(_filePath!);
 
         setState(() {
-          _frequency = features['frequency'];
-          _amplitude = features['amplitude'];
-          _decibel = features['decibel'];
-          List<double> mfcc = features['mfcc'];
+          _frequency = realtime_features['frequency'];
+          _amplitude = realtime_features['amplitude'];
+          _decibel = realtime_features['decibel'];
+          List<double> mfcc = realtime_features['mfcc'];
+          print('MFCC: $mfcc');
 
-          _isAmplitudeHigh = _amplitude > 1000;
-          _isAmplitudeLow = _amplitude >= 50 && _amplitude <= 100;
+          _isAmplitudeHigh = _amplitude > 300;
+          _isAmplitudeLow = _amplitude >= 25 && _amplitude <= 50;
 
           if (_isAmplitudeHigh || _isAmplitudeLow) {
             if (_isAmplitudeHigh) {
@@ -468,6 +489,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
         final newPath = path.join(directory!.path, 'processed_audio.wav');
         final File sourceFile = File(_filePath!);
         final File destinationFile = File(newPath);
+        _copy_features = await extractAudioFeatures(newPath);
 
         if (await sourceFile.exists()) {
           await sourceFile.copy(destinationFile.path);
@@ -488,9 +510,11 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
             setState(() {
               _comparisonResult = "Terdeteksi kata: $detectedText";
             });
+
+            _compareAudioFiles();
           } else {
             print('Kata "tolong" atau "help" tidak ditemukan. Menghapus file audio.');
-            await destinationFile.delete();
+            // await destinationFile.delete();
           }
         } else {
           print('File sumber tidak ditemukan.');
