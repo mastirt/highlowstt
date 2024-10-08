@@ -37,7 +37,7 @@ class SoundAnalyzer extends StatefulWidget {
 
 class _SoundAnalyzerState extends State<SoundAnalyzer> {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
-  final speechToText = SpeechToText.viaApiKey("AIzaSyDx5fZpE0z1QxYV7mwN1cvxig7tUvzw4Xc");
+  final speechToText = SpeechToText.viaApiKey("");
   final config = RecognitionConfig(
     encoding: AudioEncoding.LINEAR16,
     model: RecognitionModel.basic,
@@ -74,7 +74,8 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     await _recorder.openRecorder();
     _recorder.setSubscriptionDuration(Duration(milliseconds: 2000));
   }
-
+  // =================== MFCC ======================
+  //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   Future<String> _extractWaveform(String inputPath) async {
     String outputPath = '${inputPath}_waveform.pcm';
     String command = '-y -i "$inputPath" -ar 16000 -ac 1 -f s16le "$outputPath"';
@@ -170,7 +171,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     return melEnergies;
   }
 
-  /// Fungsi Dot Product
   double dot(List<double> vectorA, List<double> vectorB) {
     if (vectorA.length != vectorB.length) {
       throw Exception('Vector lengths must be equal for dot product');
@@ -183,7 +183,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     return result;
   }
 
-  /// Fungsi DCT (Discrete Cosine Transform)
   List<double> dct(List<double> input, int numCoefficients) {
     int N = input.length;
     List<double> output = List<double>.filled(numCoefficients, 0.0);
@@ -232,7 +231,11 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
 
     return mfccList;
   }
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  // ================================================
 
+  // ============== EKSTRAKSI FITUR =================
+  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   Future<Map<String, dynamic>> extractAudioFeatures(String filePath) async {
     // Read the file
     File file = File(filePath);
@@ -292,8 +295,11 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
       'mfcc': sampleMFCC,
     };
   }
+  // ================================================
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
-  // Function to load features from XML file
+  // ==================LOAD XML =====================
+  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   Future<List<Map<String, dynamic>>> loadFeaturesFromXml() async {
     // Load the XML file from assets
     final xmlString = await rootBundle.loadString('assets/xFeature.xml');
@@ -325,8 +331,11 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     }
     return audioStore;
   }
+  // ================================================
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
-  // Add this function to calculate Euclidean Distance
+  // ============= MATCHING VOICE ===================
+  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   double _euclideanDistance(List<double> vector1, List<double> vector2) {
     // Tentukan panjang minimum antara kedua vektor
     int minLength = min(vector1.length, vector2.length);
@@ -424,7 +433,58 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
       print("Error comparing audio files: $e");
     }
   }
+  // ================================================
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  
+  // ==================== STT =======================
+  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  Future<List<int>> _getAudioContent(String path) async {
+    return File(path).readAsBytesSync().toList();
+  }
 
+  Future<void> _copyAudioFile() async {
+    if (_filePath != null) {
+      try {
+        final directory = await getExternalStorageDirectory();
+        final newPath = path.join(directory!.path, 'processed_audio.wav');
+        final File sourceFile = File(_filePath!);
+        final File destinationFile = File(newPath);
+
+        if (await sourceFile.exists()) {
+          await sourceFile.copy(destinationFile.path);
+          print('File audio berhasil disalin ke: $newPath');
+          final audio = await _getAudioContent(newPath);
+          
+          final response = await speechToText.recognize(config, audio);
+          String? detectedText = response.results
+              .map((result) => result.alternatives.first.transcript)
+              .join(' ');
+          
+          print('Kata yang terdeteksi ${detectedText}');
+
+          if (detectedText.contains('tolong') || detectedText.contains('help')) {
+            print('Terdeteksi kata: $detectedText');
+            setState(() {
+              _comparisonResult = "Terdeteksi kata: $detectedText";
+            });
+            _compareAudioFiles();
+          } else {
+            print('Kata "tolong" atau "help" tidak ditemukan. Menghapus file audio.');
+            // await destinationFile.delete();
+          }
+        } else {
+          print('File sumber tidak ditemukan.');
+        }
+      } catch (e) {
+        print('Error saat menyalin file audio: $e');
+      }
+    }
+  }
+  // ================================================
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+  // ================= REALTIME =====================
+  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   Future<void> _startRecording() async {
     final directory = await getExternalStorageDirectory();
     _filePath = '${directory?.path}/audio_streaming.wav';
@@ -462,6 +522,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
             if (_isAmplitudeLow) {
               print('Amplitude rendah terdeteksi.');
             }
+            _copy_features = realtime_features;
             _copyAudioFile();
           }
         });
@@ -475,54 +536,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
     _recordingTimer = Timer.periodic(Duration(milliseconds: 2500), (timer) async {
       await _restartRecording();
     });
-  }
-
-
-  Future<List<int>> _getAudioContent(String path) async {
-    return File(path).readAsBytesSync().toList();
-  }
-
-  Future<void> _copyAudioFile() async {
-    if (_filePath != null) {
-      try {
-        final directory = await getExternalStorageDirectory();
-        final newPath = path.join(directory!.path, 'processed_audio.wav');
-        final File sourceFile = File(_filePath!);
-        final File destinationFile = File(newPath);
-        _copy_features = await extractAudioFeatures(newPath);
-
-        if (await sourceFile.exists()) {
-          await sourceFile.copy(destinationFile.path);
-          print('File audio berhasil disalin ke: $newPath');
-          final audio = await _getAudioContent(newPath);
-          
-          final response = await speechToText.recognize(config, audio);
-          String? detectedText = response.results
-              .map((result) => result.alternatives.first.transcript)
-              .join(' ');
-          
-          print('Kata yang terdeteksi ${detectedText}');
-
-          if (detectedText.contains('tolong') || detectedText.contains('help')) {
-            print('Terdeteksi kata: $detectedText');
-            // Melakukan Matching suara realtime
-
-            setState(() {
-              _comparisonResult = "Terdeteksi kata: $detectedText";
-            });
-
-            _compareAudioFiles();
-          } else {
-            print('Kata "tolong" atau "help" tidak ditemukan. Menghapus file audio.');
-            // await destinationFile.delete();
-          }
-        } else {
-          print('File sumber tidak ditemukan.');
-        }
-      } catch (e) {
-        print('Error saat menyalin file audio: $e');
-      }
-    }
   }
 
   Future<void> _restartRecording() async {
@@ -567,6 +580,8 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
       _isAmplitudeLow = false;
     });
   }
+  // ================================================
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
   @override
   void dispose() {
@@ -591,11 +606,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // if (_isRecording) const Text("Recording..."),
-            // ElevatedButton(
-            //   onPressed: _isRecording ? null : _recordSample,
-            //   child: Text('Rekam Sample ${_currentSampleIndex + 1}'),
-            // ),
             SizedBox(height: 20),
             Text(
               'Frekuensi: ${_frequency.toStringAsFixed(2)}',
