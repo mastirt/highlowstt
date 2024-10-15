@@ -376,7 +376,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
       // Tambahkan ke audioStore dengan label yang sesuai
       audioStore.add({
-        'label': 'test$i',
+        'label': 'test',
         'features': features,
       });
     }
@@ -447,7 +447,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
       if (_filePath != null) {
         Map<String, dynamic> recordedFeatures = await extractAudioFeatures(_filePath!);
         audioStore.add({
-          'label': 'user $recordingCount',
+          'label': 'user',
           'features': recordedFeatures,
         });
       }
