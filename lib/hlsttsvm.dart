@@ -25,17 +25,17 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: SoundAnalyzer(),
+      home: SoundAnalyzerSvm(),
     );
   }
 }
 
-class SoundAnalyzer extends StatefulWidget {
+class SoundAnalyzerSvm extends StatefulWidget {
   @override
   _SoundAnalyzerState createState() => _SoundAnalyzerState();
 }
 
-class _SoundAnalyzerState extends State<SoundAnalyzer> {
+class _SoundAnalyzerState extends State<SoundAnalyzerSvm> {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   final speechToText = SpeechToText.viaApiKey("AIzaSyDx5fZpE0z1QxYV7mwN1cvxig7tUvzw4Xc");
   final config = RecognitionConfig(
@@ -57,6 +57,8 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
   Map<String, dynamic> _copy_features = {};
   List<Map<String, dynamic>> nearestNeighbors = [];
   String majorityLabel = '';
+  List<double> svmWeights = [];
+  double svmBias = 0.0;
 
   @override
   void initState() {
@@ -300,37 +302,35 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
 
   // ==================LOAD XML =====================
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-  Future<List<Map<String, dynamic>>> loadFeaturesFromXml() async {
-    // Load the XML file from assets
-    final xmlString = await rootBundle.loadString('assets/xFeature.xml');
+  Future<void> loadSVMParametersFromXml() async {
+    final directory = await getExternalStorageDirectory();
+    if (directory != null) {
+      String filePath = '${directory.path}/svm_parameters.xml';
+      final file = File(filePath);
 
-    // Parse the XML content
-    final xmlDoc = xml.XmlDocument.parse(xmlString);
+      if (!file.existsSync()) {
+        print('File tidak ditemukan: $filePath');
+        return;
+      }
 
-    List<Map<String, dynamic>> audioStore = [];
+      // Baca konten file XML
+      final xmlString = await file.readAsString();
+      final xmlDoc = xml.XmlDocument.parse(xmlString);
 
-    // Extract data from the XML
-    for (var audioElement in xmlDoc.findAllElements('Audio')) {
-      String label = audioElement.findElements('Label').first.text;
-      double frequency = double.parse(audioElement.findElements('Frequency').first.text);
-      double amplitude = double.parse(audioElement.findElements('Amplitude').first.text);
-      double decibel = double.parse(audioElement.findElements('Decibel').first.text);
-      List<double> mfccs = audioElement.findElements('MFCC')
-          .map((e) => double.parse(e.text))
-          .toList();
+      // Ambil nilai bias
+      final biasElement = xmlDoc.findAllElements('Bias').first;
+      svmBias = double.parse(biasElement.text);
 
-      audioStore.add({
-        'label': label,
-        'features': {
-          'frequency': frequency,
-          'amplitude': amplitude,
-          'decibel': decibel,
-          'mfccs': mfccs,
-        }
-      });
+      // Ambil nilai weights
+      final weightElements = xmlDoc.findAllElements('Weight');
+      svmWeights = weightElements.map((element) => double.parse(element.text)).toList();
+
+      print('SVM parameters loaded successfully');
+      print('Bias: $svmBias');
+      print('Weights: $svmWeights');
     }
-    return audioStore;
   }
+
   // ================================================
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
@@ -349,6 +349,20 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
       sum += pow(trimmedVector1[i] - trimmedVector2[i], 2);
     }
     return sqrt(sum);
+  }
+
+  double _svmPredict(List<double> features) {
+    int minLength = min(svmWeights.length, features.length);
+
+    // Potong kedua vektor sesuai panjang minimum
+    List<double> trimmedFeatures = features.sublist(0, minLength);
+    List<double> trimmedWeights = svmWeights.sublist(0, minLength);
+
+    double result = svmBias;
+    for (int i = 0; i < trimmedWeights.length; i++) {
+      result += trimmedWeights[i] * trimmedFeatures[i];
+    }
+    return result;
   }
 
   Future<List<int>> _getAudioContent(String path) async {
@@ -419,10 +433,10 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
         if (detectedText.contains('tolong') || detectedText.contains('help')) {
           print('Terdeteksi kata: $detectedText');
 
-          List<Map<String, dynamic>> storedAudios = await loadFeaturesFromXml();
+          await loadSVMParametersFromXml();
 
           List<double> newFeatures = [
-            _copy_features['frequency'] ?? 0.0,
+            // _copy_features['frequency'] ?? 0.0,
             _copy_features['amplitude'] ?? 0.0,
             _copy_features['decibel'] ?? 0.0,
             ...?_copy_features['mfcc']
@@ -433,39 +447,17 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
             return;
           }
 
-          List<Map<String, dynamic>> distances = [];
-          for (var audioData in storedAudios) {
-            List<double> storeFeatures = [
-              audioData['features']['frequency'] ?? 0.0,
-              audioData['features']['amplitude'] ?? 0.0,
-              audioData['features']['decibel'] ?? 0.0,
-              ...?audioData['features']['mfccs']
-            ];
+          double prediction = _svmPredict(newFeatures);
+          bool predictionMatch = prediction > 0;
 
-            double distance = _euclideanDistance(newFeatures, storeFeatures);
-            distances.add({'label': audioData['label'], 'distance': distance});
-          }
-
-          distances.sort((a, b) => a['distance'].compareTo(b['distance']));
-          List<Map<String, dynamic>> nearestNeighbors = distances.sublist(0, min(3, distances.length));
-
-          Map<String, int> voteCount = {};
-          for (var neighbor in nearestNeighbors) {
-            String label = neighbor['label'];
-            voteCount[label] = (voteCount[label] ?? 0) + 1;
-          }
-
-          String majorityLabel = voteCount.entries.reduce((a, b) => a.value > b.value ? a : b).key;
-
-          print('Matching Audio: Suara aku, Jarak terdekat: $nearestNeighbors');
-          print('Hasil matching: $majorityLabel');
+          print('Hasil matching : $predictionMatch');
 
           setState(() {
             _comparisonResult['detectedText'] = detectedText;
-            _comparisonResult['isMatching'] = majorityLabel == 'jila';
+            _comparisonResult['isMatching'] = predictionMatch;
           });
           // Reset setelah menampilkan hasil
-          Future.delayed(Duration(seconds: 1), () {
+          Future.delayed(Duration(seconds: 2), () {
             setState(() {
               _comparisonResult = {'detectedText': '', 'isMatching': false};
             });
@@ -592,7 +584,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Real-time Sound Analysis'),
+        title: Text('Real-time Sound Analysis SVM'),
       ),
       body: Container(
         color: _isAmplitudeHigh
@@ -643,6 +635,13 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
                   style: TextStyle(fontSize: 18, color: Colors.green),
                 ),
               ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+              },
+              child: Text("Back to Recorder"),
+            ),
           ],
         ),
       ),

@@ -470,7 +470,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
 
           setState(() {
             _comparisonResult['detectedText'] = detectedText;
-            _comparisonResult['isMatching'] = majorityLabel == 'user';
+            _comparisonResult['isMatching'] = majorityLabel == '1';
           });
           // Reset setelah menampilkan hasil
           Future.delayed(Duration(seconds: 1), () {
@@ -600,7 +600,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzer> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Real-time Sound Analysis'),
+        title: Text('Real-time Sound Analysis KNN'),
       ),
       body: Container(
         color: _isAmplitudeHigh

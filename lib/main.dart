@@ -11,6 +11,7 @@ import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
 import 'package:fftea/fftea.dart';
 import 'package:xml/xml.dart' as xml;
 import 'hlsttknn.dart';
+import 'hlsttsvm.dart';
 
 void main() {
   runApp(MyApp());
@@ -40,9 +41,9 @@ class _SoundRecorderState extends State<SoundRecorder> {
   bool _isRecording = false;
   int recordingCount = 0;
   String? _filePath;
-  // Map<String, dynamic> _copy_features = {};
-  List<Map<String, dynamic>> nearestNeighbors = [];
-  String majorityLabel = '';
+  List<Map<String, dynamic>> trainingData = [];
+  List<double> svmWeights = [];
+  double svmBias = 0.0;
 
   @override
   void initState() {
@@ -287,18 +288,26 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
   // ==================LOAD XML =====================
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-  Future<List<Map<String, dynamic>>> loadFeaturesFromXml() async {
-    // Load the XML file from assets
-    final xmlString = await rootBundle.loadString('assets/xFeature.xml');
+  Future<void> loadFeaturesFromXml() async {
+    // Tentukan lokasi file XML yang disimpan di penyimpanan eksternal
+    final directory = await getExternalStorageDirectory();
+    final filePath = '${directory?.path}/audio_features.xml';
+    
+    // Baca konten file XML dari lokasi penyimpanan eksternal
+    final file = File(filePath);
+    if (!file.existsSync()) {
+      print('File tidak ditemukan: $filePath');
+      return;
+    }
 
-    // Parse the XML content
+    final xmlString = await file.readAsString();
     final xmlDoc = xml.XmlDocument.parse(xmlString);
-
-    List<Map<String, dynamic>> audioStore = [];
 
     // Extract data from the XML
     for (var audioElement in xmlDoc.findAllElements('Audio')) {
-      String label = audioElement.findElements('Label').first.text;
+      // Ubah label dari string menjadi integer
+      int label = int.parse(audioElement.findElements('Label').first.text);
+      
       double frequency = double.parse(audioElement.findElements('Frequency').first.text);
       double amplitude = double.parse(audioElement.findElements('Amplitude').first.text);
       double decibel = double.parse(audioElement.findElements('Decibel').first.text);
@@ -306,8 +315,8 @@ class _SoundRecorderState extends State<SoundRecorder> {
           .map((e) => double.parse(e.text))
           .toList();
 
-      audioStore.add({
-        'label': label,
+      trainingData.add({
+        'label': label,  // Sekarang label disimpan sebagai integer
         'features': {
           'frequency': frequency,
           'amplitude': amplitude,
@@ -316,7 +325,8 @@ class _SoundRecorderState extends State<SoundRecorder> {
         }
       });
     }
-    return audioStore;
+
+    print('Audio features loaded successfully.');
   }
   // ================================================
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -344,7 +354,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
     for (var audioData in audioStore) {
       final audioElement = xml.XmlElement(xml.XmlName('Audio'));
 
-      audioElement.children.add(xml.XmlElement(xml.XmlName('Label'), [], [xml.XmlText(audioData['label'] ?? 'Unknown')]));
+      audioElement.children.add(xml.XmlElement(xml.XmlName('Label'), [], [xml.XmlText(audioData['label'].toString())]));
       audioElement.children.add(xml.XmlElement(xml.XmlName('Frequency'), [], [xml.XmlText(audioData['features']['frequency'].toString())]));
       audioElement.children.add(xml.XmlElement(xml.XmlName('Amplitude'), [], [xml.XmlText(audioData['features']['amplitude'].toString())]));
       audioElement.children.add(xml.XmlElement(xml.XmlName('Decibel'), [], [xml.XmlText(audioData['features']['decibel'].toString())]));
@@ -376,7 +386,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
       // Tambahkan ke audioStore dengan label yang sesuai
       audioStore.add({
-        'label': 'test',
+        'label': -1,
         'features': features,
       });
     }
@@ -386,10 +396,121 @@ class _SoundRecorderState extends State<SoundRecorder> {
     print('All audio features from assets have been saved to XML file.');
   }
 
+  Future<void> saveSVMParametersToXml() async {
+    final directory = await getExternalStorageDirectory();
+    if (directory != null) {
+      String filePath = '${directory.path}/svm_parameters.xml';
+      final file = File(filePath);
+
+      // Buat elemen XML untuk menyimpan bias dan bobot
+      final builder = xml.XmlBuilder();
+      builder.processing('xml', 'version="1.0"');
+      builder.element('SVMParameters', nest: () {
+        // Simpan bias
+        builder.element('Bias', nest: svmBias.toString());
+
+        // Simpan weights
+        builder.element('Weights', nest: () {
+          for (double weight in svmWeights) {
+            builder.element('Weight', nest: weight.toString());
+          }
+        });
+      });
+
+      // Tulis data XML ke file
+      final xmlDoc = builder.buildDocument();
+      await file.writeAsString(xmlDoc.toXmlString(pretty: true));
+      print('SVM parameters saved to $filePath');
+    }
+  }
+
   // ================================================
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
-  // ================= RECORD =====================
+  // =================== SVM ========================
+  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  void _trainSVM() {
+    int fixedMfccLength = 200; // Set a fixed length for MFCCs (adjust as needed)
+    int numFeatures = fixedMfccLength + 2; // +3 for frequency, amplitude, decibel
+    svmWeights = List<double>.filled(numFeatures, 0.0);
+    svmBias = 0.0;
+
+    double learningRate = 0.001;
+    int numEpochs = 100;
+    double C = 1.0;  // Penalty parameter for misclassification
+
+    for (int epoch = 0; epoch < numEpochs; epoch++) {
+      for (var sample in trainingData) {
+        // Get features: frequency, amplitude, decibel, and mfccs
+        List<double> features = [
+          // sample['features']['frequency'],
+          sample['features']['amplitude'],
+          sample['features']['decibel']
+        ];
+
+        // Handle MFCC features: ensure length is fixed by truncating or padding
+        List<double> mfccs = sample['features']['mfcc'];
+        if (mfccs.length > fixedMfccLength) {
+          // Truncate if MFCC length is greater than the fixed length
+          mfccs = mfccs.sublist(0, fixedMfccLength);
+        } else if (mfccs.length < fixedMfccLength) {
+          // Pad with zeros if MFCC length is less than the fixed length
+          mfccs = List<double>.from(mfccs)..addAll(List<double>.filled(fixedMfccLength - mfccs.length, 0.0));
+        }
+
+        // Add the MFCC features to the feature list
+        features.addAll(mfccs);
+
+        int label = sample['label'];
+
+        // Calculate prediction
+        double prediction = _svmPredict(features);
+        double margin = label * prediction;
+
+        // Soft Margin with Slack Variable: if margin < 1, update weights
+        if (margin < 1) {
+          double slack = 1 - margin;
+
+          // Update weights with penalty C
+          for (int i = 0; i < svmWeights.length; i++) {
+            svmWeights[i] += learningRate * (label * features[i] - 2 * 0.01 * svmWeights[i]);
+          }
+
+          // Apply penalty term C for slack violation
+          svmBias += learningRate * (label - C * slack);
+        } else {
+          // If no margin violation, update without penalty
+          for (int i = 0; i < svmWeights.length; i++) {
+            svmWeights[i] += learningRate * (-2 * 0.01 * svmWeights[i]);
+          }
+        }
+
+      }
+    }
+    print('bias: $svmBias');
+    print('Weight: $svmWeights');
+    // Simpan nilai SVM parameter ke XML setelah pelatihan selesai
+    saveSVMParametersToXml();
+  }
+
+
+  double _svmPredict(List<double> features) {
+    int minLength = min(svmWeights.length, features.length);
+
+    // Potong kedua vektor sesuai panjang minimum
+    List<double> trimmedFeatures = features.sublist(0, minLength);
+    List<double> trimmedWeights = svmWeights.sublist(0, minLength);
+
+    double result = svmBias;
+    for (int i = 0; i < trimmedWeights.length; i++) {
+      result += trimmedWeights[i] * trimmedFeatures[i];
+    }
+    return result;
+  }
+  // ================================================
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+  // =================== RECORD =====================
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   Future<void> _startRecording() async {
     try {
@@ -399,7 +520,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
       }
 
       final directory = await getExternalStorageDirectory();
-      _filePath = '${directory?.path}/audio_streaming.wav';
+      _filePath = '${directory?.path}/audio_record.wav';
       print('Audio saved to: $_filePath');
 
       try {
@@ -447,7 +568,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
       if (_filePath != null) {
         Map<String, dynamic> recordedFeatures = await extractAudioFeatures(_filePath!);
         audioStore.add({
-          'label': 'user',
+          'label': 1,
           'features': recordedFeatures,
         });
       }
@@ -467,6 +588,11 @@ class _SoundRecorderState extends State<SoundRecorder> {
           String filePath = '${directory.path}/audio_features.xml';
           await loadAndAppendFeaturesFromAssets([], filePath); // Menggunakan array kosong agar tidak duplikasi
           print('Audio features from assets saved successfully.');
+
+          // Load features from XML and train SVM
+          await loadFeaturesFromXml(); // Memuat data fitur dari file XML ke dalam trainingData
+          _trainSVM(); // Melatih model SVM
+          print('SVM training completed.');
         }
       }
     } catch (e) {
@@ -521,7 +647,17 @@ class _SoundRecorderState extends State<SoundRecorder> {
                   MaterialPageRoute(builder: (context) => SoundAnalyzer()),
                 );
               },
-              child: Text("Go to Sound Analyzer"),
+              child: Text("Go to Sound Analyzer KNN"),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => SoundAnalyzerSvm()),
+                );
+              },
+              child: Text("Go to Sound Analyzer SVM"),
             ),
           ],
         ),
