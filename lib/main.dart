@@ -694,82 +694,133 @@ class _SoundRecorderState extends State<SoundRecorder> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Save Features'),
+        title: Text('Save Features', style: TextStyle(fontSize: 24, color: Colors.white)),
+        centerTitle: true,
+        backgroundColor: Colors.deepPurple,
       ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-           // Existing Widgets
-            if (recordingCount < keywords.length)
-              Text(
-                'Ucapkan Kata: "${keywords[recordingCount]}"',
-                style: TextStyle(fontSize: 20),
-              )
-            else
-              Text(
-                'Record sudah sesuai',
-                style: TextStyle(fontSize: 20, color: Colors.green),
-              ),
-            GestureDetector(
-              onTap: _isRecording || recordingCount >= 8 ? null : _startRecording,
-              child: Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: _isRecording ? Colors.red : Colors.brown[400],
-                  shape: BoxShape.circle,
+      body: Padding(
+        padding: EdgeInsets.all(20.0),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              // Title and Instructions
+              Card(
+                color: Colors.purple[50],
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(
-                  _isRecording ? Icons.mic : Icons.mic_off,
-                  color: Colors.white,
-                  size: 40,
+                child: Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: recordingCount < keywords.length
+                      ? Column(
+                          children: [
+                            Text(
+                              'Instruksi Perekaman',
+                              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                            ),
+                            SizedBox(height: 10),
+                            Text(
+                              'Ucapkan Kata: "${keywords[recordingCount]}"',
+                              style: TextStyle(fontSize: 18, color: Colors.deepPurple[700]),
+                            ),
+                          ],
+                        )
+                      : Column(
+                          children: [
+                            Text(
+                              'Record sudah sesuai',
+                              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green[700]),
+                            ),
+                            Icon(Icons.check_circle, color: Colors.green, size: 40),
+                          ],
+                        ),
                 ),
               ),
-            ),
-            SizedBox(height: 10),
-            if (showError)
-              Text(
-                'Kata tidak sesuai, coba lagi.',
-                style: TextStyle(color: Colors.red, fontSize: 16),
+              SizedBox(height: 20),
+              // Microphone Button
+              GestureDetector(
+                onTap: _isRecording || recordingCount >= keywords.length ? null : _startRecording,
+                child: Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: _isRecording ? Colors.red : Colors.deepPurple,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
+                    ],
+                  ),
+                  child: Icon(
+                    _isRecording ? Icons.mic : Icons.mic_off,
+                    color: Colors.white,
+                    size: 36,
+                  ),
+                ),
               ),
-            SizedBox(height: 20),
-            Text(
-              'Recording ${recordingCount}/8',
-              style: TextStyle(fontSize: 18),
-            ),
-            SizedBox(height: 20),
-            // Tombol Reset
-            ElevatedButton(
-              onPressed: _resetRecording,
-              child: Text("Reset Recording"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
+              SizedBox(height: 15),
+              // Error Message
+              if (showError)
+                Text(
+                  'Kata tidak sesuai, coba lagi.',
+                  style: TextStyle(color: Colors.red, fontSize: 16),
+                ),
+              SizedBox(height: 15),
+              // Recording Status
+              Card(
+                color: Colors.purple[50],
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.all(12.0),
+                  child: Text(
+                    'Recording ${recordingCount}/8',
+                    style: TextStyle(fontSize: 18, color: Colors.deepPurple[700]),
+                  ),
+                ),
               ),
-            ),
-            SizedBox(height: 20),
-            // Tombol Navigasi
-            ElevatedButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => SoundAnalyzer()),
-                );
-              },
-              child: Text("Go to Sound Analyzer KNN"),
-            ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => SoundAnalyzerSvm()),
-                );
-              },
-              child: Text("Go to Sound Analyzer SVM"),
-            ),
-          ],
+              SizedBox(height: 20),
+              // Reset Button
+              ElevatedButton.icon(
+                onPressed: _resetRecording,
+                icon: Icon(Icons.refresh),
+                label: Text("Reset Recording"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  textStyle: TextStyle(fontSize: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+              SizedBox(height: 20),
+              // Tombol Navigasi
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => SoundAnalyzer()),
+                  );
+                },
+                child: Text("Go to Sound Analyzer KNN"),
+              ),
+              SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => SoundAnalyzerSvm()),
+                  );
+                },
+                child: Text("Go to Sound Analyzer SVM"),
+              ),
+            ],
+          ),
         ),
       ),
     );
