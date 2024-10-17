@@ -415,7 +415,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzerSvm> {
 
         print('Kata yang terdeteksi: $detectedText');
 
-        if (detectedText.contains('tolong') || detectedText.contains('help')) {
+        if (detectedText.contains('tolong') || detectedText.contains('help') || detectedText.contains('aw') || detectedText.contains('aduh')) {
           print('Terdeteksi kata: $detectedText');
 
           await loadSVMParametersFromXml();

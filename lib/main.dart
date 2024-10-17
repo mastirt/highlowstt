@@ -46,10 +46,11 @@ class _SoundRecorderState extends State<SoundRecorder> {
     sampleRateHertz: 16000,
     languageCode: 'id-ID',
   );
-  final List<String> keywords = ['tolong', 'tolong', 'help', 'aw', 'aduh'];
+  final List<String> keywords = ['tolong', 'tolong', 'help', 'help', 'aw', 'aw', 'aduh', 'aduh'];
   bool showError = false;
   bool _isRecording = false;
   int recordingCount = 0;
+  // int currentRecordingIndex = 0;
   String? _filePath;
   List<Map<String, dynamic>> trainingData = [];
   List<double> svmWeights = [];
@@ -543,7 +544,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   Future<void> _startRecording() async {
     try {
-      if (recordingCount >= 5) {
+      if (recordingCount >= 8) {
         print('maximum recording reached.');
         return;
       }
@@ -603,7 +604,10 @@ class _SoundRecorderState extends State<SoundRecorder> {
           .join(' ');
 
       if (detectedText == keywords[recordingCount]) {
-        recordingCount++;
+        setState(() {
+          recordingCount++;
+          // currentRecordingIndex++;
+        });
         print("Correct keyword detected: $detectedText");
 
         List<Map<String, dynamic>> audioStore = [];
@@ -625,7 +629,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
         }
 
         // Tambahkan fitur dari assets ke XML ketika recordingCount mencapai 5
-        if (recordingCount == 5) {
+        if (recordingCount == 8) {
           final directory = await getExternalStorageDirectory();
           if (directory != null) {
             String filePath = '${directory.path}/audio_features.xml';
@@ -682,9 +686,6 @@ class _SoundRecorderState extends State<SoundRecorder> {
       print('Error resetting recording: $e');
     }
   }
-
-
-
   // ================================================
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
@@ -699,13 +700,19 @@ class _SoundRecorderState extends State<SoundRecorder> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            // Widgets yang sudah ada
-            Text(
-              'Ucapkan Kata: "${keywords[recordingCount]}"',
-              style: TextStyle(fontSize: 20),
-            ),
+           // Existing Widgets
+            if (recordingCount < keywords.length)
+              Text(
+                'Ucapkan Kata: "${keywords[recordingCount]}"',
+                style: TextStyle(fontSize: 20),
+              )
+            else
+              Text(
+                'Record sudah sesuai',
+                style: TextStyle(fontSize: 20, color: Colors.green),
+              ),
             GestureDetector(
-              onTap: _isRecording || recordingCount >= 5 ? null : _startRecording,
+              onTap: _isRecording || recordingCount >= 8 ? null : _startRecording,
               child: Container(
                 width: 80,
                 height: 80,
@@ -728,7 +735,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
               ),
             SizedBox(height: 20),
             Text(
-              'Recording ${recordingCount}/5',
+              'Recording ${recordingCount}/8',
               style: TextStyle(fontSize: 18),
             ),
             SizedBox(height: 20),
