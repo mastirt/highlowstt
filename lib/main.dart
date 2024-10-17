@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
+import 'package:google_speech/google_speech.dart';
 import 'package:fftea/fftea.dart';
 import 'package:xml/xml.dart' as xml;
 import 'hlsttknn.dart';
@@ -37,13 +38,27 @@ class SoundRecorder extends StatefulWidget {
 
 class _SoundRecorderState extends State<SoundRecorder> {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
-
+  final speechToText = SpeechToText.viaApiKey("AIzaSyDx5fZpE0z1QxYV7mwN1cvxig7tUvzw4Xc");
+  final config = RecognitionConfig(
+    encoding: AudioEncoding.LINEAR16,
+    model: RecognitionModel.basic,
+    enableAutomaticPunctuation: true,
+    sampleRateHertz: 16000,
+    languageCode: 'id-ID',
+  );
+  final List<String> keywords = ['tolong', 'tolong', 'help', 'aw', 'aduh'];
+  bool showError = false;
   bool _isRecording = false;
   int recordingCount = 0;
   String? _filePath;
   List<Map<String, dynamic>> trainingData = [];
   List<double> svmWeights = [];
   double svmBias = 0.0;
+  List<double> bestWeights = [];
+  double bestBias = 0.0;
+  double bestLearningRate = 0.0;
+  int bestEpoch = 0;
+  double bestC = 0.0;
 
   @override
   void initState() {
@@ -396,32 +411,24 @@ class _SoundRecorderState extends State<SoundRecorder> {
     print('All audio features from assets have been saved to XML file.');
   }
 
-  Future<void> saveSVMParametersToXml() async {
-    final directory = await getExternalStorageDirectory();
-    if (directory != null) {
-      String filePath = '${directory.path}/svm_parameters.xml';
-      final file = File(filePath);
-
-      // Buat elemen XML untuk menyimpan bias dan bobot
-      final builder = xml.XmlBuilder();
-      builder.processing('xml', 'version="1.0"');
-      builder.element('SVMParameters', nest: () {
-        // Simpan bias
-        builder.element('Bias', nest: svmBias.toString());
-
-        // Simpan weights
-        builder.element('Weights', nest: () {
-          for (double weight in svmWeights) {
-            builder.element('Weight', nest: weight.toString());
-          }
-        });
+  Future<void> saveSVMParametersToXml(List<double> weights, double bias) async {
+    final builder = xml.XmlBuilder();
+    builder.processing('xml', 'version="1.0"');
+    builder.element('SVMParameters', nest: () {
+      builder.element('Weights', nest: () {
+        for (var weight in weights) {
+          builder.element('Weight', nest: weight.toString());
+        }
       });
+      builder.element('Bias', nest: bias.toString());
+    });
 
-      // Tulis data XML ke file
-      final xmlDoc = builder.buildDocument();
-      await file.writeAsString(xmlDoc.toXmlString(pretty: true));
-      print('SVM parameters saved to $filePath');
-    }
+    final directory = await getExternalStorageDirectory();
+    final filePath = '${directory!.path}/svm_parameters.xml';
+    final file = File(filePath);
+    file.writeAsStringSync(builder.buildDocument().toString());
+
+    print('Saved best SVM parameters to: $filePath');
   }
 
   // ================================================
@@ -429,75 +436,48 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
   // =================== SVM ========================
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-  void _trainSVM() {
-    int fixedMfccLength = 200; // Set a fixed length for MFCCs (adjust as needed)
-    int numFeatures = fixedMfccLength + 2; // +3 for frequency, amplitude, decibel
+  // Fungsi untuk melatih SVM dengan hyperparameter yang diberikan
+  void _trainSVM(List<Map<String, dynamic>> trainingData, double learningRate, int numEpochs, double C) {
+    int fixedMfccLength = 200;
+    int numFeatures = fixedMfccLength + 2;
     svmWeights = List<double>.filled(numFeatures, 0.0);
     svmBias = 0.0;
 
-    double learningRate = 0.001;
-    int numEpochs = 100;
-    double C = 1.0;  // Penalty parameter for misclassification
-
     for (int epoch = 0; epoch < numEpochs; epoch++) {
       for (var sample in trainingData) {
-        // Get features: frequency, amplitude, decibel, and mfccs
         List<double> features = [
-          // sample['features']['frequency'],
           sample['features']['amplitude'],
           sample['features']['decibel']
         ];
 
-        // Handle MFCC features: ensure length is fixed by truncating or padding
         List<double> mfccs = sample['features']['mfcc'];
         if (mfccs.length > fixedMfccLength) {
-          // Truncate if MFCC length is greater than the fixed length
           mfccs = mfccs.sublist(0, fixedMfccLength);
         } else if (mfccs.length < fixedMfccLength) {
-          // Pad with zeros if MFCC length is less than the fixed length
           mfccs = List<double>.from(mfccs)..addAll(List<double>.filled(fixedMfccLength - mfccs.length, 0.0));
         }
-
-        // Add the MFCC features to the feature list
         features.addAll(mfccs);
-
         int label = sample['label'];
-
-        // Calculate prediction
         double prediction = _svmPredict(features);
         double margin = label * prediction;
 
-        // Soft Margin with Slack Variable: if margin < 1, update weights
         if (margin < 1) {
           double slack = 1 - margin;
-
-          // Update weights with penalty C
           for (int i = 0; i < svmWeights.length; i++) {
             svmWeights[i] += learningRate * (label * features[i] - 2 * 0.01 * svmWeights[i]);
           }
-
-          // Apply penalty term C for slack violation
           svmBias += learningRate * (label - C * slack);
         } else {
-          // If no margin violation, update without penalty
           for (int i = 0; i < svmWeights.length; i++) {
             svmWeights[i] += learningRate * (-2 * 0.01 * svmWeights[i]);
           }
         }
-
       }
     }
-    print('bias: $svmBias');
-    print('Weight: $svmWeights');
-    // Simpan nilai SVM parameter ke XML setelah pelatihan selesai
-    saveSVMParametersToXml();
   }
-
 
   double _svmPredict(List<double> features) {
     int minLength = min(svmWeights.length, features.length);
-
-    // Potong kedua vektor sesuai panjang minimum
     List<double> trimmedFeatures = features.sublist(0, minLength);
     List<double> trimmedWeights = svmWeights.sublist(0, minLength);
 
@@ -506,6 +486,55 @@ class _SoundRecorderState extends State<SoundRecorder> {
       result += trimmedWeights[i] * trimmedFeatures[i];
     }
     return result;
+  }
+
+  double evaluateSVM(List<Map<String, dynamic>> validationData) {
+    int correctPredictions = 0;
+    for (var sample in validationData) {
+      List<double> features = [
+        sample['features']['amplitude'],
+        sample['features']['decibel'],
+        ...sample['features']['mfcc']
+      ];
+      int label = sample['label'];
+      double prediction = _svmPredict(features);
+      if ((prediction > 0 && label == 1) || (prediction <= 0 && label == -1)) {
+        correctPredictions++;
+      }
+    }
+    return correctPredictions / validationData.length;
+  }
+
+  void tuneAndTrainSVM(List<Map<String, dynamic>> trainingData, List<Map<String, dynamic>> validationData) {
+    List<double> learningRates = [0.001, 0.01, 0.1];
+    List<int> epochOptions = [50, 100, 150];
+    List<double> penaltyValues = [0.1, 1.0, 10.0];
+
+    double bestAccuracy = 0.0;
+
+    for (double learningRate in learningRates) {
+      for (int numEpochs in epochOptions) {
+        for (double C in penaltyValues) {
+          _trainSVM(trainingData, learningRate, numEpochs, C);
+          double accuracy = evaluateSVM(validationData);
+
+          if (accuracy > bestAccuracy) {
+            bestAccuracy = accuracy;
+            bestLearningRate = learningRate;
+            bestEpoch = numEpochs;
+            bestC = C;
+            bestWeights = List.from(svmWeights);
+            bestBias = svmBias;
+          }
+        }
+      }
+    }
+
+    print('Best Parameters - Learning Rate: $bestLearningRate, Epochs: $bestEpoch, C: $bestC');
+    print('Best Accuracy: $bestAccuracy');
+    
+    // Simpan parameter terbaik ke dalam file XML
+    saveSVMParametersToXml(bestWeights, bestBias);
   }
   // ================================================
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -550,6 +579,10 @@ class _SoundRecorderState extends State<SoundRecorder> {
     }
   }
 
+  Future<List<int>> _getAudioContent(String path) async {
+    return File(path).readAsBytesSync().toList();
+  }
+
   // Modifikasi pada fungsi _stopRecording
   Future<void> _stopRecording() async {
     try {
@@ -560,43 +593,93 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
       setState(() {
         _isRecording = false;
-        recordingCount++;
+        showError = false;
       });
 
-      List<Map<String, dynamic>> audioStore = [];
+      final audio = await _getAudioContent(_filePath!);
+      final response = await speechToText.recognize(config, audio);
+      String? detectedText = response.results
+          .map((result) => result.alternatives.first.transcript)
+          .join(' ');
 
-      if (_filePath != null) {
-        Map<String, dynamic> recordedFeatures = await extractAudioFeatures(_filePath!);
-        audioStore.add({
-          'label': 1,
-          'features': recordedFeatures,
-        });
-      }
+      if (detectedText == keywords[recordingCount]) {
+        recordingCount++;
+        print("Correct keyword detected: $detectedText");
 
-      // Simpan fitur dari rekaman ke file XML
-      final directory = await getExternalStorageDirectory();
-      if (directory != null) {
-        String filePath = '${directory.path}/audio_features.xml';
-        await saveFeaturesToXml(audioStore, filePath);
-        print('Audio features saved successfully.');
-      }
+        List<Map<String, dynamic>> audioStore = [];
 
-      // Tambahkan fitur dari assets ke XML ketika recordingCount mencapai 5
-      if (recordingCount == 5) {
+        if (_filePath != null) {
+          Map<String, dynamic> recordedFeatures = await extractAudioFeatures(_filePath!);
+          audioStore.add({
+            'label': 1,
+            'features': recordedFeatures,
+          });
+        }
+
+        // Simpan fitur dari rekaman ke file XML
         final directory = await getExternalStorageDirectory();
         if (directory != null) {
           String filePath = '${directory.path}/audio_features.xml';
-          await loadAndAppendFeaturesFromAssets([], filePath); // Menggunakan array kosong agar tidak duplikasi
-          print('Audio features from assets saved successfully.');
-
-          // Load features from XML and train SVM
-          await loadFeaturesFromXml(); // Memuat data fitur dari file XML ke dalam trainingData
-          _trainSVM(); // Melatih model SVM
-          print('SVM training completed.');
+          await saveFeaturesToXml(audioStore, filePath);
+          print('Audio features saved successfully.');
         }
+
+        // Tambahkan fitur dari assets ke XML ketika recordingCount mencapai 5
+        if (recordingCount == 5) {
+          final directory = await getExternalStorageDirectory();
+          if (directory != null) {
+            String filePath = '${directory.path}/audio_features.xml';
+            await loadAndAppendFeaturesFromAssets([], filePath); // Menggunakan array kosong agar tidak duplikasi
+            print('Audio features from assets saved successfully.');
+
+            // Load features from XML and train SVM
+            await loadFeaturesFromXml(); // Memuat data fitur dari file XML ke dalam trainingData
+            tuneAndTrainSVM(trainingData, trainingData); // Melatih model SVM
+            print('SVM training completed.');
+          }
+        }
+      } else {
+        setState(() {
+          showError = true;
+        });
+        // Incorrect keyword, prompt to retry
+        print("Incorrect keyword. Expected: ${keywords[recordingCount]}, Detected: $detectedText");
       }
     } catch (e) {
       print('Error stopping recorder: $e');
+    }
+  }
+
+  Future<void> _resetRecording() async {
+    try {
+      // Get the directory and XML file path
+      final directory = await getExternalStorageDirectory();
+      if (directory != null) {
+        final filePathFeature = '${directory.path}/audio_features.xml';
+        final filefeature = File(filePathFeature);
+        final filePathSvm = '${directory.path}/svm_parameters.xml';
+        final filesvm = File(filePathSvm);
+
+        // Delete the XML file if it exists
+        if (await filefeature.exists()) {
+          await filefeature.delete();
+          print('XML Feature file deleted.');
+        }
+        if (await filesvm.exists()) {
+          await filesvm.delete();
+          print('XML SVM file deleted.');
+        }
+      }
+
+      // Reset recording count and error state
+      setState(() {
+        recordingCount = 0;
+        showError = false;
+      });
+
+      print('Recording count reset.');
+    } catch (e) {
+      print('Error resetting recording: $e');
     }
   }
 
@@ -617,6 +700,10 @@ class _SoundRecorderState extends State<SoundRecorder> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
             // Widgets yang sudah ada
+            Text(
+              'Ucapkan Kata: "${keywords[recordingCount]}"',
+              style: TextStyle(fontSize: 20),
+            ),
             GestureDetector(
               onTap: _isRecording || recordingCount >= 5 ? null : _startRecording,
               child: Container(
@@ -633,10 +720,26 @@ class _SoundRecorderState extends State<SoundRecorder> {
                 ),
               ),
             ),
+            SizedBox(height: 10),
+            if (showError)
+              Text(
+                'Kata tidak sesuai, coba lagi.',
+                style: TextStyle(color: Colors.red, fontSize: 16),
+              ),
             SizedBox(height: 20),
             Text(
               'Recording ${recordingCount}/5',
               style: TextStyle(fontSize: 18),
+            ),
+            SizedBox(height: 20),
+            // Tombol Reset
+            ElevatedButton(
+              onPressed: _resetRecording,
+              child: Text("Reset Recording"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
             ),
             SizedBox(height: 20),
             // Tombol Navigasi

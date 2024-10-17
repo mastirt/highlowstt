@@ -336,21 +336,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzerSvm> {
 
   // =========== MATCHING VOICE & STT ===============
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-  double _euclideanDistance(List<double> vector1, List<double> vector2) {
-    // Tentukan panjang minimum antara kedua vektor
-    int minLength = min(vector1.length, vector2.length);
-
-    // Potong kedua vektor sesuai panjang minimum
-    List<double> trimmedVector1 = vector1.sublist(0, minLength);
-    List<double> trimmedVector2 = vector2.sublist(0, minLength);
-
-    double sum = 0.0;
-    for (int i = 0; i < minLength; i++) {
-      sum += pow(trimmedVector1[i] - trimmedVector2[i], 2);
-    }
-    return sqrt(sum);
-  }
-
   double _svmPredict(List<double> features) {
     int minLength = min(svmWeights.length, features.length);
 
@@ -457,7 +442,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzerSvm> {
             _comparisonResult['isMatching'] = predictionMatch;
           });
           // Reset setelah menampilkan hasil
-          Future.delayed(Duration(seconds: 2), () {
+          Future.delayed(Duration(seconds: 1), () {
             setState(() {
               _comparisonResult = {'detectedText': '', 'isMatching': false};
             });
@@ -631,7 +616,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzerSvm> {
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Text(
-                  'Kata terdeteksi: ${_comparisonResult['detectedText']} \nCocok dengan Jila: ${_comparisonResult['isMatching'] ? "Ya" : "Tidak"}',
+                  'Kata terdeteksi: ${_comparisonResult['detectedText']} \nCocok dengan User: ${_comparisonResult['isMatching'] ? "Ya" : "Tidak"}',
                   style: TextStyle(fontSize: 18, color: Colors.green),
                 ),
               ),
