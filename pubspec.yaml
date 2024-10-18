@@ -72,6 +72,11 @@ flutter:
     - assets/test3.wav
     - assets/test4.wav
     - assets/test5.wav
+    - assets/test6.wav
+    - assets/test7.wav
+    - assets/test8.wav
+    - assets/test9.wav
+    - assets/test10.wav
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see

@@ -388,7 +388,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
   }
 
   Future<void> loadAndAppendFeaturesFromAssets(List<Map<String, dynamic>> audioStore, String filePath) async {
-    for (int i = 1; i <= 5; i++) {
+    for (int i = 1; i <= 10; i++) {
       // Muat file audio dari assets
       ByteData audioData = await rootBundle.load('assets/test$i.wav');
 

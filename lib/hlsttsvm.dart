@@ -448,7 +448,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzerSvm> {
             });
           });
         } else {
-          print('Kata "tolong" atau "help" tidak ditemukan.');
+          print('Kata "tolong", "help", "aw", "aduh" tidak ditemukan.');
         }
       } else {
         print('File sumber tidak ditemukan.');
@@ -569,63 +569,171 @@ class _SoundAnalyzerState extends State<SoundAnalyzerSvm> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Real-time Sound Analysis SVM'),
+        title: Text('Real-time Sound Analysis SVM', style: TextStyle(color: Colors.white)),
+        centerTitle: true,
+        backgroundColor: Colors.deepPurple,
       ),
       body: Container(
         color: _isAmplitudeHigh
-            ? Colors.red
+            ? Colors.red[100]
             : _isAmplitudeLow
-                ? Colors.blue
-                : Colors.white,
+                ? Colors.blue[100]
+                : Colors.grey[100],
         padding: const EdgeInsets.all(16.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(height: 20),
-            Text(
-              'Frekuensi: ${_frequency.toStringAsFixed(2)}',
-              style: TextStyle(fontSize: 20),
+            // Frequency Display
+            Card(
+              color: Colors.deepPurple[50],
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Icon(Icons.multitrack_audio, color: Colors.deepPurple),
+                    Text(
+                      'Frekuensi: ${_frequency.toStringAsFixed(2)} Hz',
+                      style: TextStyle(fontSize: 20, color: Colors.deepPurple[700]),
+                    ),
+                  ],
+                ),
+              ),
             ),
             SizedBox(height: 20),
-            Text(
-              'Amplitudo: ${_amplitude.toStringAsFixed(2)}',
-              style: TextStyle(fontSize: 20),
+            // Amplitude Display
+            Card(
+              color: Colors.deepPurple[50],
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Icon(Icons.graphic_eq, color: Colors.deepPurple),
+                    Text(
+                      'Amplitudo: ${_amplitude.toStringAsFixed(2)}',
+                      style: TextStyle(fontSize: 20, color: Colors.deepPurple[700]),
+                    ),
+                  ],
+                ),
+              ),
             ),
             SizedBox(height: 20),
-            Text(
-              'Desibel: ${_decibel.toStringAsFixed(2)} dB',
-              style: TextStyle(fontSize: 20),
+            // Decibel Display
+            Card(
+              color: Colors.deepPurple[50],
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Icon(Icons.volume_up, color: Colors.deepPurple),
+                    Text(
+                      'Desibel: ${_decibel.toStringAsFixed(2)} dB',
+                      style: TextStyle(fontSize: 20, color: Colors.deepPurple[700]),
+                    ),
+                  ],
+                ),
+              ),
             ),
             SizedBox(height: 20),
+            // Warning or Information Message
             if (_isAmplitudeHigh)
-              Text(
-                'Peringatan: Suara terlalu tinggi!',
-                style: TextStyle(fontSize: 24, color: Colors.white, fontWeight: FontWeight.bold),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                child: Text(
+                  'Peringatan: Suara terlalu tinggi!',
+                  style: TextStyle(
+                    fontSize: 22,
+                    color: Colors.red[700],
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
               ),
             if (_isAmplitudeLow)
-              Text(
-                'Keterangan: Suara rendah',
-                style: TextStyle(fontSize: 24, color: Colors.white, fontWeight: FontWeight.bold),
-              ),
-            SizedBox(height: 50),
-            ElevatedButton(
-              onPressed: _isRecording ? _stopRecording : _startRecording,
-              child: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
-            ),
-            if (_comparisonResult['detectedText'] != '') 
               Padding(
-                padding: const EdgeInsets.all(16.0),
+                padding: const EdgeInsets.symmetric(vertical: 8.0),
                 child: Text(
-                  'Kata terdeteksi: ${_comparisonResult['detectedText']} \nCocok dengan User: ${_comparisonResult['isMatching'] ? "Ya" : "Tidak"}',
-                  style: TextStyle(fontSize: 18, color: Colors.green),
+                  'Keterangan: Suara rendah',
+                  style: TextStyle(
+                    fontSize: 22,
+                    color: Colors.blue[700],
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
               ),
             SizedBox(height: 20),
+            // Start/Stop Recording Button
+            ElevatedButton.icon(
+              onPressed: _isRecording ? _stopRecording : _startRecording,
+              icon: Icon(_isRecording ? Icons.stop : Icons.mic),
+              label: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.deepPurple,
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.symmetric(vertical: 16),
+                textStyle: TextStyle(fontSize: 18),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+            SizedBox(height: 20),
+            // Detected Word Information
+            // if (_comparisonResult['detectedText'] != '')
+            Card(
+              color: Colors.green[50],
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  children: [
+                    Text(
+                      'Kata terdeteksi: ${_comparisonResult['detectedText']}',
+                      style: TextStyle(fontSize: 18, color: Colors.green[800]),
+                    ),
+                    Text(
+                      'Cocok dengan User: ${_comparisonResult['isMatching'] ? "Ya" : "Tidak"}',
+                      style: TextStyle(fontSize: 18, color: Colors.green[800]),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            SizedBox(height: 20),
+            // Back Button
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(context);
               },
               child: Text("Back to Recorder"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.grey[600],
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.symmetric(vertical: 14),
+                textStyle: TextStyle(fontSize: 18),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
             ),
           ],
         ),
