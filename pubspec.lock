@@ -73,6 +73,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.8"
+  eneural_net:
+    dependency: "direct dev"
+    description:
+      name: eneural_net
+      sha256: f04a0ae10c46ad36f58c0119db973b264cac73523fa633920ea1ede094084378
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.2.0"
   fake_async:
     dependency: transitive
     description:
@@ -150,6 +158,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "9.16.2"
+  flutter_sound_processing:
+    dependency: "direct dev"
+    description:
+      name: flutter_sound_processing
+      sha256: b2f344a38c09dc12366d0165e512613652a6d9ffc340be1cb9ed2d6fb926c02f
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.0"
   flutter_sound_web:
     dependency: transitive
     description:
@@ -224,6 +240,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.0.2"
+  intl:
+    dependency: transitive
+    description:
+      name: intl
+      sha256: "3bc132a9dbce73a7e4a21a17d06e1878839ffbf975568bc875c60537824b0c4d"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.18.1"
   js:
     dependency: transitive
     description:
@@ -456,6 +480,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.1.0"
+  resource_portable:
+    dependency: transitive
+    description:
+      name: resource_portable
+      sha256: "76af61ea5af4719f0a5a9776dddb7bc61e0a85fa5b7978423cc20566f2f97b53"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.1.0"
   sky_engine:
     dependency: transitive
     description: flutter
@@ -501,6 +533,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.2.0"
+  swiss_knife:
+    dependency: transitive
+    description:
+      name: swiss_knife
+      sha256: cf89dc6f698d0a9ca899fee788ee945725b080631025714d822595dad30f29a2
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.1.6"
   synchronized:
     dependency: transitive
     description:

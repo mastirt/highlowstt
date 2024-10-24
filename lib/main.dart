@@ -11,8 +11,18 @@ import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
 import 'package:google_speech/google_speech.dart';
 import 'package:fftea/fftea.dart';
 import 'package:xml/xml.dart' as xml;
+import 'package:eneural_net/eneural_net.dart';
+import 'package:flutter_sound_processing/flutter_sound_processing.dart';
 import 'hlsttknn.dart';
 import 'hlsttsvm.dart';
+import 'hlsttann.dart';
+
+const int bufferSize = 7839;
+const int sampleRate = 16000;
+const int hopLength = 350;
+const int nMels = 40;
+const int fftSize = 512;
+const int mfcc = 40;
 
 void main() {
   runApp(MyApp());
@@ -35,6 +45,7 @@ class SoundRecorder extends StatefulWidget {
   @override
   _SoundRecorderState createState() => _SoundRecorderState();
 }
+
 
 class _SoundRecorderState extends State<SoundRecorder> {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
@@ -112,11 +123,6 @@ class _SoundRecorderState extends State<SoundRecorder> {
       if (sample > 32767) sample -= 65536;
       normalizedData.add(sample / 32768.0);
     }
-
-    // if (normalizedData.every((sample) => sample == 0)) {
-    //   throw Exception("Audio normalization failed. All samples are zero.");
-    // }
-
     return normalizedData;
   }
 
@@ -226,7 +232,6 @@ class _SoundRecorderState extends State<SoundRecorder> {
       }
     }
 
-
     var mfccList = <double>[];
     for (var frame in melSpectrogram) {
       var dctCoeffs = dct(frame, numCoefficients);
@@ -276,7 +281,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
     int maxFreqIndex = freqsDouble.indexOf(maxAmplitude);
 
     // Dominant frequency calculation
-    double dominantFreq = (maxFreqIndex * 16000) / (audioList.length / 2); // Divide by 2 for FFT symmetry
+    double dominantFreq = (maxFreqIndex * sampleRate) / (audioList.length / 2); // Divide by 2 for FFT symmetry
 
     // Decibel calculation
     double minAmplitude = 1e-10;
@@ -286,17 +291,43 @@ class _SoundRecorderState extends State<SoundRecorder> {
     }
     double decibel = 20 * log(maxAmplitude) / log(10);
 
-    // MFCC Calculation (13 coefficients as an example)
-    String pcmPath = await _extractWaveform(filePath);
-    final audioBytes = await _getAudioBytes(pcmPath);
-    List<double> sampleMFCC = computeMFCC(audioBytes, 16000, 13);
+    // MFCC Calculation using Flutter Sound Processing
+    final flutterSoundProcessingPlugin = FlutterSoundProcessing();
+    final signals = audioList.toList(); // Use the normalized audio list
+
+    // Extract MFCC features
+    final featureMatrix = await flutterSoundProcessingPlugin.getFeatureMatrix(
+      signals: signals,
+      fftSize: fftSize,
+      hopLength: hopLength,
+      nMels: nMels,
+      mfcc: mfcc,
+      sampleRate: sampleRate,
+    );
+
+    // Jika featureMatrix valid, hitung rata-rata koefisien MFCC
+    List<double> averageMFCC = List.filled(40, 0.0); // Inisialisasi untuk 40 koefisien MFCC
+
+    if (featureMatrix != null && featureMatrix.isNotEmpty) {
+      int frameCount = featureMatrix.length ~/ 40; // Jumlah frame berdasarkan panjang data
+
+      // Iterasi melalui setiap frame
+      for (int frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+        for (int i = 0; i < 40; i++) {
+          averageMFCC[i] += featureMatrix[frameIndex * 40 + i];
+        }
+      }
+
+      // Menghitung rata-rata setiap koefisien MFCC
+      averageMFCC = averageMFCC.map((mfcc) => mfcc / frameCount).toList();
+    }
 
     // Return the extracted features as a map
     return {
       'frequency': dominantFreq,
       'amplitude': maxAmplitude,
       'decibel': decibel,
-      'mfcc': sampleMFCC,
+      'mfcc': averageMFCC,
     };
   }
   // ================================================
@@ -388,7 +419,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
   }
 
   Future<void> loadAndAppendFeaturesFromAssets(List<Map<String, dynamic>> audioStore, String filePath) async {
-    for (int i = 1; i <= 10; i++) {
+    for (int i = 1; i <= 20; i++) {
       // Muat file audio dari assets
       ByteData audioData = await rootBundle.load('assets/test$i.wav');
 
@@ -402,7 +433,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
       // Tambahkan ke audioStore dengan label yang sesuai
       audioStore.add({
-        'label': -1,
+        'label': 0,
         'features': features,
       });
     }
@@ -439,7 +470,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   // Fungsi untuk melatih SVM dengan hyperparameter yang diberikan
   void _trainSVM(List<Map<String, dynamic>> trainingData, double learningRate, int numEpochs, double C) {
-    int fixedMfccLength = 200;
+    int fixedMfccLength = 40;
     int numFeatures = fixedMfccLength + 2;
     svmWeights = List<double>.filled(numFeatures, 0.0);
     svmBias = 0.0;
@@ -540,6 +571,120 @@ class _SoundRecorderState extends State<SoundRecorder> {
   // ================================================
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
+  // =============== NEURAL NETWORK =================
+  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  // Fungsi untuk mengambil MFCC dengan panjang tetap
+  List<double> _getFixedLengthMFCCs(List<double> mfccs, int fixedLength) {
+    if (mfccs.length >= fixedLength) {
+      return mfccs.sublist(0, fixedLength); // Potong MFCC jika panjangnya lebih dari fixedLength
+    } else {
+      // Jika panjang MFCC kurang, tambahkan 0 sampai mencapai fixedLength
+      return mfccs + List<double>.filled(fixedLength - mfccs.length, 0.0);
+    }
+  }
+
+  // Fungsi untuk menyimpan model ke file
+  Future<void> _saveModelToFile(ANN ann, String filename) async {
+    try {
+      final directory = await getExternalStorageDirectory();
+      final file = File('${directory?.path}/$filename');
+      
+      // Menggunakan method toJson() bawaan dari library
+      final modelJson = ann.toJson(withIndent: true);
+      
+      // Simpan JSON ke file
+      await file.writeAsString(modelJson);
+      print('Model berhasil disimpan ke: ${file.path}');
+    } catch (e) {
+      print('Error saat menyimpan model: $e');
+    }
+  }
+
+  // Neural network to replace SVM training
+  void _trainANN(List<Map<String, dynamic>> trainingData) {
+    int fixedMfccLength = 40;
+    int numFeatures = fixedMfccLength + 2;
+    var scale = ScaleDouble.ZERO_TO_ONE;
+
+    var samples = trainingData.map((sample) {
+      List<double> features = [
+        sample['features']['amplitude'],
+        sample['features']['decibel'],
+        ..._getFixedLengthMFCCs(sample['features']['mfcc'], fixedMfccLength)
+      ];
+      int label = sample['label'];
+      // print('ini label $label');
+      return '${features.join(",")}=$label';
+    }).toList();
+
+    var sampleSet = SamplesSet(
+      SampleFloat32x4.toListFromString(samples, scale, true),
+      subject: 'audio_classification'
+    );
+
+    var activationFunction = ActivationFunctionSigmoid();
+    var ann = ANN(
+      scale,
+      LayerFloat32x4(numFeatures, true, ActivationFunctionLinear()),
+      [HiddenLayerConfig(10, true, activationFunction)],
+      LayerFloat32x4(1, false, activationFunction)
+    );
+
+    print('Starting ANN training...');
+
+    var backpropagation = Backpropagation(ann, sampleSet);
+    var targetError = backpropagation.trainUntilGlobalError(
+      targetGlobalError: 0.01,
+      maxEpochs: 100,
+      maxRetries: 10
+    );
+
+    print('Training complete. Achieved target error: $targetError');
+
+    // Menghitung global error dan detail prediksi
+    var globalError = ann.computeSamplesGlobalError(sampleSet.samples);
+    print('\nTraining Evaluation:');
+    print('Global Error: $globalError');
+    
+    int correctPredictions = 0;
+    print('\nSamples Outputs:');
+    for (var i = 0; i < sampleSet.samples.length; ++i) {
+      var sample = sampleSet.samples[i];
+      var input = sample.input;
+      var expected = sample.output;
+      
+      // Activate the sample input
+      ann.activate(input);
+      var output = ann.output;
+      
+      // Convert output to binary prediction (0 or 1)
+      var predictedLabel = output[0] >= 0.5 ? 1.0 : 0.0;
+      var actualLabel = expected[0];
+      
+      // Check if prediction is correct
+      if ((predictedLabel - actualLabel).abs() < 0.1) { // Using threshold for floating point comparison
+        correctPredictions++;
+      }
+      
+      print('Sample $i:');
+      print('  Input: $input');
+      print('  Predicted: $output (Binary: $predictedLabel)');
+      print('  Expected: $expected');
+      print('  Error: ${output[0] - expected[0]}');
+    }
+
+    // Calculate and print accuracy
+    double accuracy = correctPredictions / sampleSet.samples.length;
+    print('\nTraining Metrics:');
+    print('Accuracy: ${(accuracy * 100).toStringAsFixed(2)}%');
+    print('Correct Predictions: $correctPredictions/${sampleSet.samples.length}');
+
+    // Simpan model ke file menggunakan method bawaan
+    _saveModelToFile(ann, 'voice_recognition_model.json');
+  }
+  // ================================================
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
   // =================== RECORD =====================
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   Future<void> _startRecording() async {
@@ -557,6 +702,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
         await _recorder.startRecorder(
           toFile: _filePath,
           codec: Codec.pcm16WAV,
+          sampleRate: sampleRate
         );
       } catch (e) {
         print('Error in starting recorder: $e');
@@ -606,7 +752,6 @@ class _SoundRecorderState extends State<SoundRecorder> {
       if (detectedText == keywords[recordingCount]) {
         setState(() {
           recordingCount++;
-          // currentRecordingIndex++;
         });
         print("Correct keyword detected: $detectedText");
 
@@ -637,9 +782,10 @@ class _SoundRecorderState extends State<SoundRecorder> {
             print('Audio features from assets saved successfully.');
 
             // Load features from XML and train SVM
-            await loadFeaturesFromXml(); // Memuat data fitur dari file XML ke dalam trainingData
-            tuneAndTrainSVM(trainingData, trainingData); // Melatih model SVM
-            print('SVM training completed.');
+            await loadFeaturesFromXml();
+            // tuneAndTrainSVM(trainingData, trainingData); // Melatih model SVM
+            _trainANN(trainingData);
+            print('Model training completed.');
           }
         }
       } else {
@@ -663,6 +809,8 @@ class _SoundRecorderState extends State<SoundRecorder> {
         final filefeature = File(filePathFeature);
         final filePathSvm = '${directory.path}/svm_parameters.xml';
         final filesvm = File(filePathSvm);
+        final filePathAnn = '${directory.path}/voice_recognition_model.json';
+        final fileAnn = File(filePathAnn);
 
         // Delete the XML file if it exists
         if (await filefeature.exists()) {
@@ -672,6 +820,10 @@ class _SoundRecorderState extends State<SoundRecorder> {
         if (await filesvm.exists()) {
           await filesvm.delete();
           print('XML SVM file deleted.');
+        }
+        if (await fileAnn.exists()) {
+          await fileAnn.delete();
+          print('JSON ANN file deleted.');
         }
       }
 
@@ -818,6 +970,16 @@ class _SoundRecorderState extends State<SoundRecorder> {
                   );
                 },
                 child: Text("Go to Sound Analyzer SVM"),
+              ),
+              SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => SoundAnalyzerAnn()),
+                  );
+                },
+                child: Text("Go to Sound Analyzer ANN"),
               ),
             ],
           ),

@@ -44,6 +44,8 @@ dev_dependencies:
   permission_handler: ^11.3.1
   ffmpeg_kit_flutter: ^6.0.3
   fftea: ^1.5.0+1
+  eneural_net: ^1.2.0
+  flutter_sound_processing: ^0.1.0
   flutter_test:
     sdk: flutter
 
@@ -77,6 +79,16 @@ flutter:
     - assets/test8.wav
     - assets/test9.wav
     - assets/test10.wav
+    - assets/test11.wav
+    - assets/test12.wav
+    - assets/test13.wav
+    - assets/test14.wav
+    - assets/test15.wav
+    - assets/test16.wav
+    - assets/test17.wav
+    - assets/test18.wav
+    - assets/test19.wav
+    - assets/test20.wav
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see
