@@ -618,7 +618,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
     }).toList();
 
     var sampleSet = SamplesSet(
-      SampleFloat32x4.toListFromString(samples, scale, true),
+      SampleFloat32x4.toListFromString(samples, scale, false),
       subject: 'audio_classification'
     );
 
@@ -634,8 +634,8 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
     var backpropagation = Backpropagation(ann, sampleSet);
     var targetError = backpropagation.trainUntilGlobalError(
-      targetGlobalError: 0.01,
-      maxEpochs: 100,
+      targetGlobalError: 0.001,
+      maxEpochs: 1000,
       maxRetries: 10
     );
 
@@ -749,7 +749,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
           .map((result) => result.alternatives.first.transcript)
           .join(' ');
 
-      if (detectedText == keywords[recordingCount]) {
+      if (detectedText == keywords[recordingCount] ) {
         setState(() {
           recordingCount++;
         });
