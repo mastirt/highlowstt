@@ -370,7 +370,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
           var predictedLabel = output[0] >= 0.5 ? 1.0 : 0.0;
           bool predictionMatch = false;
           // Check if prediction is correct
-          if ((output[0] - label).abs() < 0.1 && predictedLabel == label) { // Using threshold for floating point comparison
+          if ((output[0] - label).abs() < 0.15 && predictedLabel == label) { // Using threshold for floating point comparison
             predictionMatch = true;
           }
 

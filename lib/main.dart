@@ -7,7 +7,7 @@ import 'package:flutter_sound/flutter_sound.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
+// import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
 import 'package:google_speech/google_speech.dart';
 import 'package:fftea/fftea.dart';
 import 'package:xml/xml.dart' as xml;
@@ -49,6 +49,7 @@ class SoundRecorder extends StatefulWidget {
 
 class _SoundRecorderState extends State<SoundRecorder> {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
+  StreamSubscription? _recorderSubscription;
   final speechToText = SpeechToText.viaApiKey("AIzaSyDx5fZpE0z1QxYV7mwN1cvxig7tUvzw4Xc");
   final config = RecognitionConfig(
     encoding: AudioEncoding.LINEAR16,
@@ -71,6 +72,9 @@ class _SoundRecorderState extends State<SoundRecorder> {
   double bestLearningRate = 0.0;
   int bestEpoch = 0;
   double bestC = 0.0;
+  double _amplitude = 0.0;
+  bool _isAmplitudeHigh = false;
+  bool _isAmplitudeLow = false;
 
   @override
   void initState() {
@@ -240,7 +244,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
   //   return mfccList;
   // }
-  // // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
   // ================================================
 
   // ============== EKSTRAKSI FITUR =================
@@ -698,26 +702,45 @@ class _SoundRecorderState extends State<SoundRecorder> {
       _filePath = '${directory?.path}/audio_record.wav';
       print('Audio saved to: $_filePath');
 
-      try {
-        await _recorder.startRecorder(
-          toFile: _filePath,
-          codec: Codec.pcm16WAV,
-          sampleRate: sampleRate
-        );
-      } catch (e) {
-        print('Error in starting recorder: $e');
-      }
-
       var status = await Permission.microphone.request();
       if (!status.isGranted) {
         print("Microphone permission is not granted");
-        return; // Jika izin tidak diberikan, tidak melanjutkan perekaman
+        return;
       }
+
+      // Start recorder with level monitoring
+      await _recorder.startRecorder(
+        toFile: _filePath,
+        codec: Codec.pcm16WAV,
+        sampleRate: sampleRate
+      );
+
+      // Setup amplitude monitoring
+      _recorderSubscription = _recorder.onProgress!.listen((event) {
+        if (event.decibels != null) {
+          setState(() {
+            // Konversi dB ke amplitude
+            _amplitude = pow(10, (event.decibels! / 20)) as double;
+            
+            // Update flags berdasarkan threshold
+            _isAmplitudeHigh = _amplitude > 1000;
+            _isAmplitudeLow = _amplitude >= 50 && _amplitude <= 400;
+            
+            // Debug print
+            if (_isAmplitudeHigh) {
+              print('High amplitude detected: $_amplitude');
+            } else if (_isAmplitudeLow) {
+              print('Low amplitude detected: $_amplitude');
+            }
+          });
+        }
+      });
 
       setState(() {
         _isRecording = true;
       });
 
+      // Stop recording after 2 seconds
       Timer(Duration(seconds: 2), () async {
         await _stopRecording();
       });
@@ -733,6 +756,10 @@ class _SoundRecorderState extends State<SoundRecorder> {
   // Modifikasi pada fungsi _stopRecording
   Future<void> _stopRecording() async {
     try {
+      // Cancel amplitude monitoring subscription
+      await _recorderSubscription?.cancel();
+      _recorderSubscription = null;
+
       if (_recorder.isRecording) {
         await _recorder.stopRecorder();
         print('Recording stopped.');
@@ -749,7 +776,21 @@ class _SoundRecorderState extends State<SoundRecorder> {
           .map((result) => result.alternatives.first.transcript)
           .join(' ');
 
-      if (detectedText == keywords[recordingCount] ) {
+      // Kondisi untuk menyimpan rekaman berdasarkan amplitudo
+      bool shouldSaveRecording = false;
+
+      // Amplitudo rendah pada indeks rekaman genap
+      if (_isAmplitudeLow && recordingCount % 2 == 0) {
+        shouldSaveRecording = true;
+        print('Saving low amplitude recording');
+      }
+      // Amplitudo tinggi pada indeks rekaman ganjil
+      if (_isAmplitudeHigh && recordingCount % 2 != 0) {
+        shouldSaveRecording = true;
+        print('Saving high amplitude recording');
+      }
+
+      if (detectedText == keywords[recordingCount] && shouldSaveRecording) {
         setState(() {
           recordingCount++;
         });
@@ -762,10 +803,13 @@ class _SoundRecorderState extends State<SoundRecorder> {
           audioStore.add({
             'label': 1,
             'features': recordedFeatures,
+            'amplitude': _amplitude,  // Menyimpan nilai amplitude
+            'isHigh': _isAmplitudeHigh,
+            'isLow': _isAmplitudeLow
           });
         }
 
-        // Simpan fitur dari rekaman ke file XML
+        // Save features to XML
         final directory = await getExternalStorageDirectory();
         if (directory != null) {
           String filePath = '${directory.path}/audio_features.xml';
@@ -773,17 +817,14 @@ class _SoundRecorderState extends State<SoundRecorder> {
           print('Audio features saved successfully.');
         }
 
-        // Tambahkan fitur dari assets ke XML ketika recordingCount mencapai 5
         if (recordingCount == 8) {
           final directory = await getExternalStorageDirectory();
           if (directory != null) {
             String filePath = '${directory.path}/audio_features.xml';
-            await loadAndAppendFeaturesFromAssets([], filePath); // Menggunakan array kosong agar tidak duplikasi
+            await loadAndAppendFeaturesFromAssets([], filePath);
             print('Audio features from assets saved successfully.');
 
-            // Load features from XML and train SVM
             await loadFeaturesFromXml();
-            // tuneAndTrainSVM(trainingData, trainingData); // Melatih model SVM
             _trainANN(trainingData);
             print('Model training completed.');
           }
@@ -792,8 +833,8 @@ class _SoundRecorderState extends State<SoundRecorder> {
         setState(() {
           showError = true;
         });
-        // Incorrect keyword, prompt to retry
-        print("Incorrect keyword. Expected: ${keywords[recordingCount]}, Detected: $detectedText");
+        print("Incorrect keyword or amplitude. Expected: ${keywords[recordingCount]}, Detected: $detectedText");
+        print("Amplitude: $_amplitude, High: $_isAmplitudeHigh, Low: $_isAmplitudeLow");
       }
     } catch (e) {
       print('Error stopping recorder: $e');
@@ -844,6 +885,30 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
   @override
   Widget build(BuildContext context) {
+    // Helper function untuk mendapatkan instruksi volume
+    String getVolumeInstruction() {
+      if (recordingCount >= keywords.length) return '';
+      return recordingCount % 2 == 0 
+          ? '(Berbisik)' 
+          : '(Berteriak)';
+    }
+
+    // Helper function untuk mendapatkan warna instruksi
+    Color getInstructionColor() {
+      if (recordingCount >= keywords.length) return Colors.green;
+      return recordingCount % 2 == 0 
+          ? Colors.blue 
+          : Colors.red;
+    }
+
+    // Helper function untuk mendapatkan icon instruksi
+    IconData getVolumeIcon() {
+      if (recordingCount >= keywords.length) return Icons.check_circle;
+      return recordingCount % 2 == 0 
+          ? Icons.volume_down 
+          : Icons.volume_up;
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text('Save Features', style: TextStyle(fontSize: 24, color: Colors.white)),
@@ -873,6 +938,26 @@ class _SoundRecorderState extends State<SoundRecorder> {
                               style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.deepPurple),
                             ),
                             SizedBox(height: 10),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  getVolumeIcon(),
+                                  color: getInstructionColor(),
+                                  size: 24,
+                                ),
+                                SizedBox(width: 8),
+                                Text(
+                                  getVolumeInstruction(),
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: getInstructionColor(),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            SizedBox(height: 10),
                             Text(
                               'Ucapkan Kata: "${keywords[recordingCount]}"',
                               style: TextStyle(fontSize: 18, color: Colors.deepPurple[700]),
@@ -891,6 +976,59 @@ class _SoundRecorderState extends State<SoundRecorder> {
                 ),
               ),
               SizedBox(height: 20),
+
+              // Recording Progress Indicator
+              Container(
+                padding: EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                decoration: BoxDecoration(
+                  color: Colors.purple[100],
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      'Progress Rekaman',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.deepPurple,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(8, (index) {
+                        return Container(
+                          margin: EdgeInsets.symmetric(horizontal: 4),
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: index < recordingCount 
+                                ? Colors.green 
+                                : index == recordingCount 
+                                    ? (index % 2 == 0 ? Colors.blue : Colors.red)
+                                    : Colors.grey[300],
+                          ),
+                          child: index < recordingCount
+                              ? Icon(Icons.check, size: 14, color: Colors.white)
+                              : null,
+                        );
+                      }),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      '${recordingCount}/8 rekaman',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.deepPurple[700],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: 20),
+
               // Microphone Button
               GestureDetector(
                 onTap: _isRecording || recordingCount >= keywords.length ? null : _startRecording,
@@ -898,7 +1036,11 @@ class _SoundRecorderState extends State<SoundRecorder> {
                   width: 80,
                   height: 80,
                   decoration: BoxDecoration(
-                    color: _isRecording ? Colors.red : Colors.deepPurple,
+                    color: _isRecording 
+                        ? Colors.red 
+                        : recordingCount >= keywords.length 
+                            ? Colors.grey 
+                            : Colors.deepPurple,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
@@ -912,74 +1054,82 @@ class _SoundRecorderState extends State<SoundRecorder> {
                 ),
               ),
               SizedBox(height: 15),
+
               // Error Message
               if (showError)
-                Text(
-                  'Kata tidak sesuai, coba lagi.',
-                  style: TextStyle(color: Colors.red, fontSize: 16),
-                ),
-              SizedBox(height: 15),
-              // Recording Status
-              Card(
-                color: Colors.purple[50],
-                elevation: 4,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Padding(
-                  padding: EdgeInsets.all(12.0),
-                  child: Text(
-                    'Recording ${recordingCount}/8',
-                    style: TextStyle(fontSize: 18, color: Colors.deepPurple[700]),
-                  ),
-                ),
-              ),
-              SizedBox(height: 20),
-              // Reset Button
-              ElevatedButton.icon(
-                onPressed: _resetRecording,
-                icon: Icon(Icons.refresh),
-                label: Text("Reset Recording"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red,
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  textStyle: TextStyle(fontSize: 16),
-                  shape: RoundedRectangleBorder(
+                Container(
+                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.red[100],
                     borderRadius: BorderRadius.circular(8),
                   ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.error_outline, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text(
+                        'Kata tidak sesuai, coba lagi.',
+                        style: TextStyle(color: Colors.red, fontSize: 16),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
               SizedBox(height: 20),
-              // Tombol Navigasi
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => SoundAnalyzer()),
-                  );
-                },
-                child: Text("Go to Sound Analyzer KNN"),
-              ),
-              SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => SoundAnalyzerSvm()),
-                  );
-                },
-                child: Text("Go to Sound Analyzer SVM"),
-              ),
-              SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => SoundAnalyzerAnn()),
-                  );
-                },
-                child: Text("Go to Sound Analyzer ANN"),
+
+              // Navigation Buttons
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                alignment: WrapAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _resetRecording,
+                    icon: Icon(Icons.refresh),
+                    label: Text("Reset"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => SoundAnalyzer()),
+                    ),
+                    icon: Icon(Icons.analytics),
+                    label: Text("KNN"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => SoundAnalyzerSvm()),
+                    ),
+                    icon: Icon(Icons.analytics_outlined),
+                    label: Text("SVM"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => SoundAnalyzerAnn()),
+                    ),
+                    icon: Icon(Icons.architecture),
+                    label: Text("ANN"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
