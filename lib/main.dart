@@ -90,157 +90,157 @@ class _SoundRecorderState extends State<SoundRecorder> {
   }
   // =================== MFCC ======================
   //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-  Future<String> _extractWaveform(String inputPath) async {
-    String outputPath = '${inputPath}_waveform.pcm';
-    String command = '-y -i "$inputPath" -ar 16000 -ac 1 -f s16le "$outputPath"';
+  // Future<String> _extractWaveform(String inputPath) async {
+  //   String outputPath = '${inputPath}_waveform.pcm';
+  //   String command = '-y -i "$inputPath" -ar 16000 -ac 1 -f s16le "$outputPath"';
 
-    await FFmpegKit.execute(command).then((session) async {
-      final returnCode = await session.getReturnCode();
-      if (returnCode != null && returnCode.isValueSuccess()) {
-        print('Waveform extracted successfully for $inputPath');
-      } else {
-        final output = await session.getOutput();
-        print('Error extracting waveform: $output');
-      }
-    });
+  //   await FFmpegKit.execute(command).then((session) async {
+  //     final returnCode = await session.getReturnCode();
+  //     if (returnCode != null && returnCode.isValueSuccess()) {
+  //       print('Waveform extracted successfully for $inputPath');
+  //     } else {
+  //       final output = await session.getOutput();
+  //       print('Error extracting waveform: $output');
+  //     }
+  //   });
 
-    return outputPath;
-  }
+  //   return outputPath;
+  // }
 
-  Future<List<int>> _getAudioBytes(String filePath) async {
-    final audioFile = File(filePath);
-    if (!await audioFile.exists()) {
-      throw Exception("Audio file not found at path: $filePath");
-    }
-    final audioData = await audioFile.readAsBytes();
-    return audioData;
-  }
+  // Future<List<int>> _getAudioBytes(String filePath) async {
+  //   final audioFile = File(filePath);
+  //   if (!await audioFile.exists()) {
+  //     throw Exception("Audio file not found at path: $filePath");
+  //   }
+  //   final audioData = await audioFile.readAsBytes();
+  //   return audioData;
+  // }
 
-  List<double> normalizeAudioData(List<int> audioBytes) {
-    List<double> normalizedData = [];
-    for (int i = 0; i < audioBytes.length - 1; i += 2) {
-      int sample = audioBytes[i] | (audioBytes[i + 1] << 8);
-      if (sample > 32767) sample -= 65536;
-      normalizedData.add(sample / 32768.0);
-    }
-    return normalizedData;
-  }
+  // List<double> normalizeAudioData(List<int> audioBytes) {
+  //   List<double> normalizedData = [];
+  //   for (int i = 0; i < audioBytes.length - 1; i += 2) {
+  //     int sample = audioBytes[i] | (audioBytes[i + 1] << 8);
+  //     if (sample > 32767) sample -= 65536;
+  //     normalizedData.add(sample / 32768.0);
+  //   }
+  //   return normalizedData;
+  // }
 
-  List<Float64List> melFilterbank(int numFilters, int fftSize, int sampleRate) {
-    // Helper function to convert frequency to Mel scale
-    double hzToMel(double hz) {
-      return 2595 * log(1 + hz / 700) / ln10; // Convert Hz to Mel scale
-    }
+  // List<Float64List> melFilterbank(int numFilters, int fftSize, int sampleRate) {
+  //   // Helper function to convert frequency to Mel scale
+  //   double hzToMel(double hz) {
+  //     return 2595 * log(1 + hz / 700) / ln10; // Convert Hz to Mel scale
+  //   }
 
-    // Helper function to convert Mel scale to frequency
-    double melToHz(double mel) {
-      return 700 * (pow(10, mel / 2595) - 1); // Convert Mel scale to Hz
-    }
+  //   // Helper function to convert Mel scale to frequency
+  //   double melToHz(double mel) {
+  //     return 700 * (pow(10, mel / 2595) - 1); // Convert Mel scale to Hz
+  //   }
 
-    // Create filterbank
-    var melFilters = List<Float64List>.generate(numFilters, (i) => Float64List(fftSize ~/ 2 + 1));
+  //   // Create filterbank
+  //   var melFilters = List<Float64List>.generate(numFilters, (i) => Float64List(fftSize ~/ 2 + 1));
 
-    // Define the low and high frequency limits
-    double lowFreqMel = hzToMel(0); // Lowest frequency (0 Hz)
-    double highFreqMel = hzToMel(sampleRate / 2); // Nyquist frequency (half of sample rate)
+  //   // Define the low and high frequency limits
+  //   double lowFreqMel = hzToMel(0); // Lowest frequency (0 Hz)
+  //   double highFreqMel = hzToMel(sampleRate / 2); // Nyquist frequency (half of sample rate)
 
-    // Compute equally spaced Mel points
-    var melPoints = List<double>.generate(numFilters + 2, (i) {
-      return lowFreqMel + i * (highFreqMel - lowFreqMel) / (numFilters + 1);
-    });
+  //   // Compute equally spaced Mel points
+  //   var melPoints = List<double>.generate(numFilters + 2, (i) {
+  //     return lowFreqMel + i * (highFreqMel - lowFreqMel) / (numFilters + 1);
+  //   });
 
-    // Convert Mel points back to Hz
-    var hzPoints = melPoints.map(melToHz).toList();
+  //   // Convert Mel points back to Hz
+  //   var hzPoints = melPoints.map(melToHz).toList();
 
-    // Convert Hz points to FFT bin numbers
-    var binPoints = hzPoints.map((hz) {
-      return ((fftSize + 1) * hz / sampleRate).floor();
-    }).toList();
+  //   // Convert Hz points to FFT bin numbers
+  //   var binPoints = hzPoints.map((hz) {
+  //     return ((fftSize + 1) * hz / sampleRate).floor();
+  //   }).toList();
 
-    // Fill the Mel filterbank with triangular filters
-    for (int i = 1; i < numFilters + 1; i++) {
-      for (int j = binPoints[i - 1]; j < binPoints[i]; j++) {
-        melFilters[i - 1][j] = (j - binPoints[i - 1]) / (binPoints[i] - binPoints[i - 1]);
-      }
-      for (int j = binPoints[i]; j < binPoints[i + 1]; j++) {
-        melFilters[i - 1][j] = (binPoints[i + 1] - j) / (binPoints[i + 1] - binPoints[i]);
-      }
-    }
+  //   // Fill the Mel filterbank with triangular filters
+  //   for (int i = 1; i < numFilters + 1; i++) {
+  //     for (int j = binPoints[i - 1]; j < binPoints[i]; j++) {
+  //       melFilters[i - 1][j] = (j - binPoints[i - 1]) / (binPoints[i] - binPoints[i - 1]);
+  //     }
+  //     for (int j = binPoints[i]; j < binPoints[i + 1]; j++) {
+  //       melFilters[i - 1][j] = (binPoints[i + 1] - j) / (binPoints[i + 1] - binPoints[i]);
+  //     }
+  //   }
 
-    return melFilters;
-  }
+  //   return melFilters;
+  // }
 
-  List<double> applyMelFilterbank(List<double> stftFrame, List<Float64List> melFilters) {
-    var melEnergies = List<double>.filled(melFilters.length, 0.0);
+  // List<double> applyMelFilterbank(List<double> stftFrame, List<Float64List> melFilters) {
+  //   var melEnergies = List<double>.filled(melFilters.length, 0.0);
 
-    for (int i = 0; i < melFilters.length; i++) {
-      melEnergies[i] = dot(melFilters[i], stftFrame);
-    }
+  //   for (int i = 0; i < melFilters.length; i++) {
+  //     melEnergies[i] = dot(melFilters[i], stftFrame);
+  //   }
 
-    return melEnergies;
-  }
+  //   return melEnergies;
+  // }
 
-  double dot(List<double> vectorA, List<double> vectorB) {
-    if (vectorA.length != vectorB.length) {
-      throw Exception('Vector lengths must be equal for dot product');
-    }
+  // double dot(List<double> vectorA, List<double> vectorB) {
+  //   if (vectorA.length != vectorB.length) {
+  //     throw Exception('Vector lengths must be equal for dot product');
+  //   }
 
-    double result = 0.0;
-    for (int i = 0; i < vectorA.length; i++) {
-      result += vectorA[i] * vectorB[i];
-    }
-    return result;
-  }
+  //   double result = 0.0;
+  //   for (int i = 0; i < vectorA.length; i++) {
+  //     result += vectorA[i] * vectorB[i];
+  //   }
+  //   return result;
+  // }
 
-  List<double> dct(List<double> input, int numCoefficients) {
-    int N = input.length;
-    List<double> output = List<double>.filled(numCoefficients, 0.0);
+  // List<double> dct(List<double> input, int numCoefficients) {
+  //   int N = input.length;
+  //   List<double> output = List<double>.filled(numCoefficients, 0.0);
 
-    for (int k = 0; k < numCoefficients; k++) {
-      double sum = 0.0;
-      for (int n = 0; n < N; n++) {
-        sum += input[n] * cos((pi / N) * (n + 0.5) * k);
-      }
-      output[k] = sum;
-    }
+  //   for (int k = 0; k < numCoefficients; k++) {
+  //     double sum = 0.0;
+  //     for (int n = 0; n < N; n++) {
+  //       sum += input[n] * cos((pi / N) * (n + 0.5) * k);
+  //     }
+  //     output[k] = sum;
+  //   }
 
-    return output;
-  }
+  //   return output;
+  // }
 
-  List<double> computeMFCC(List<int> audioBytes, int sampleRate, int numCoefficients) {
-    var audioSignal = normalizeAudioData(audioBytes);
+  // List<double> computeMFCC(List<int> audioBytes, int sampleRate, int numCoefficients) {
+  //   var audioSignal = normalizeAudioData(audioBytes);
 
-    final chunkSize = 512;
-    final stft = STFT(chunkSize, Window.hanning(chunkSize));
-    final spectrogram = <Float64List>[];
+  //   final chunkSize = 512;
+  //   final stft = STFT(chunkSize, Window.hanning(chunkSize));
+  //   final spectrogram = <Float64List>[];
 
-    stft.run(audioSignal, (Float64x2List freq) {
-      final magnitudes = freq.discardConjugates().magnitudes();
-      spectrogram.add(magnitudes);
-    });
+  //   stft.run(audioSignal, (Float64x2List freq) {
+  //     final magnitudes = freq.discardConjugates().magnitudes();
+  //     spectrogram.add(magnitudes);
+  //   });
 
-    var melFilters = melFilterbank(26, chunkSize, sampleRate);
-    var melSpectrogram = <List<double>>[];
-    for (var frame in spectrogram) {
-      var melEnergies = applyMelFilterbank(frame, melFilters);
-      melSpectrogram.add(melEnergies);
-    }
+  //   var melFilters = melFilterbank(26, chunkSize, sampleRate);
+  //   var melSpectrogram = <List<double>>[];
+  //   for (var frame in spectrogram) {
+  //     var melEnergies = applyMelFilterbank(frame, melFilters);
+  //     melSpectrogram.add(melEnergies);
+  //   }
 
-    for (var i = 0; i < melSpectrogram.length; i++) {
-      for (var j = 0; j < melSpectrogram[i].length; j++) {
-        melSpectrogram[i][j] = log(melSpectrogram[i][j] + 1e-10);
-      }
-    }
+  //   for (var i = 0; i < melSpectrogram.length; i++) {
+  //     for (var j = 0; j < melSpectrogram[i].length; j++) {
+  //       melSpectrogram[i][j] = log(melSpectrogram[i][j] + 1e-10);
+  //     }
+  //   }
 
-    var mfccList = <double>[];
-    for (var frame in melSpectrogram) {
-      var dctCoeffs = dct(frame, numCoefficients);
-      mfccList.addAll(dctCoeffs);
-    }
+  //   var mfccList = <double>[];
+  //   for (var frame in melSpectrogram) {
+  //     var dctCoeffs = dct(frame, numCoefficients);
+  //     mfccList.addAll(dctCoeffs);
+  //   }
 
-    return mfccList;
-  }
-  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  //   return mfccList;
+  // }
+  // // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
   // ================================================
 
   // ============== EKSTRAKSI FITUR =================
