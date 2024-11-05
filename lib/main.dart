@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:core';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -7,7 +8,7 @@ import 'package:flutter_sound/flutter_sound.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'package:permission_handler/permission_handler.dart';
-// import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
 import 'package:google_speech/google_speech.dart';
 import 'package:fftea/fftea.dart';
 import 'package:xml/xml.dart' as xml;
@@ -50,15 +51,16 @@ class SoundRecorder extends StatefulWidget {
 class _SoundRecorderState extends State<SoundRecorder> {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   StreamSubscription? _recorderSubscription;
-  final speechToText = SpeechToText.viaApiKey("AIzaSyDx5fZpE0z1QxYV7mwN1cvxig7tUvzw4Xc");
+  final speechToText = SpeechToText.viaApiKey("AIzaSyBgM6CzvKTZVEit_d-kOxjfstTW4OWe6ac");
   final config = RecognitionConfig(
     encoding: AudioEncoding.LINEAR16,
-    model: RecognitionModel.basic,
+    model: RecognitionModel.command_and_search,
     enableAutomaticPunctuation: true,
     sampleRateHertz: 16000,
     languageCode: 'id-ID',
   );
-  final List<String> keywords = ['tolong', 'tolong', 'help', 'help', 'aw', 'aw', 'aduh', 'aduh'];
+  final List<String> keywords = ['tolong', 'tolong', 'help', 'help', 'aduh', 'aduh'];
+  late Stream<Map<dynamic, dynamic>> result;
   bool showError = false;
   bool _isRecording = false;
   int recordingCount = 0;
@@ -73,8 +75,10 @@ class _SoundRecorderState extends State<SoundRecorder> {
   int bestEpoch = 0;
   double bestC = 0.0;
   double _amplitude = 0.0;
+  // double _decibel = 0.0;
   bool _isAmplitudeHigh = false;
   bool _isAmplitudeLow = false;
+  // String _sound = "Listening...";
 
   @override
   void initState() {
@@ -84,166 +88,187 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
   Future<void> _initRecorder() async {
     // Request permissions for microphone and storage
-    var status = await Permission.microphone.request();
-    if (status != PermissionStatus.granted) {
+    var statusmic = await Permission.microphone.request();
+    if (statusmic != PermissionStatus.granted) {
       print('Microphone permission not granted');
       return;
     }
+
     await _recorder.openRecorder();
     _recorder.setSubscriptionDuration(Duration(milliseconds: 2000));
   }
   // =================== MFCC ======================
   //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-  // Future<String> _extractWaveform(String inputPath) async {
-  //   String outputPath = '${inputPath}_waveform.pcm';
-  //   String command = '-y -i "$inputPath" -ar 16000 -ac 1 -f s16le "$outputPath"';
+  Future<String> _extractWaveform(String inputPath) async {
+    String outputPath = '${inputPath}_waveform.pcm';
+    String command = '-y -i "$inputPath" -ar 16000 -ac 1 -f s16le "$outputPath"';
 
-  //   await FFmpegKit.execute(command).then((session) async {
-  //     final returnCode = await session.getReturnCode();
-  //     if (returnCode != null && returnCode.isValueSuccess()) {
-  //       print('Waveform extracted successfully for $inputPath');
-  //     } else {
-  //       final output = await session.getOutput();
-  //       print('Error extracting waveform: $output');
-  //     }
-  //   });
+    await FFmpegKit.execute(command).then((session) async {
+      final returnCode = await session.getReturnCode();
+      if (returnCode != null && returnCode.isValueSuccess()) {
+        print('Waveform extracted successfully for $inputPath');
+      } else {
+        final output = await session.getOutput();
+        print('Error extracting waveform: $output');
+      }
+    });
 
-  //   return outputPath;
-  // }
+    return outputPath;
+  }
 
-  // Future<List<int>> _getAudioBytes(String filePath) async {
-  //   final audioFile = File(filePath);
-  //   if (!await audioFile.exists()) {
-  //     throw Exception("Audio file not found at path: $filePath");
-  //   }
-  //   final audioData = await audioFile.readAsBytes();
-  //   return audioData;
-  // }
+  Future<List<int>> _getAudioBytes(String filePath) async {
+    final audioFile = File(filePath);
+    if (!await audioFile.exists()) {
+      throw Exception("Audio file not found at path: $filePath");
+    }
+    final audioData = await audioFile.readAsBytes();
+    return audioData;
+  }
 
-  // List<double> normalizeAudioData(List<int> audioBytes) {
-  //   List<double> normalizedData = [];
-  //   for (int i = 0; i < audioBytes.length - 1; i += 2) {
-  //     int sample = audioBytes[i] | (audioBytes[i + 1] << 8);
-  //     if (sample > 32767) sample -= 65536;
-  //     normalizedData.add(sample / 32768.0);
-  //   }
-  //   return normalizedData;
-  // }
+  List<double> normalizeAudioData(List<int> audioBytes) {
+    List<double> normalizedData = [];
+    for (int i = 0; i < audioBytes.length - 1; i += 2) {
+      int sample = audioBytes[i] | (audioBytes[i + 1] << 8);
+      if (sample > 32767) sample -= 65536;
+      normalizedData.add(sample / 32768.0);
+    }
+    return normalizedData;
+  }
 
-  // List<Float64List> melFilterbank(int numFilters, int fftSize, int sampleRate) {
-  //   // Helper function to convert frequency to Mel scale
-  //   double hzToMel(double hz) {
-  //     return 2595 * log(1 + hz / 700) / ln10; // Convert Hz to Mel scale
-  //   }
+  List<Float64List> melFilterbank(int numFilters, int fftSize, int sampleRate) {
+    // Helper function to convert frequency to Mel scale
+    double hzToMel(double hz) {
+      return 2595 * log(1 + hz / 700) / ln10; // Convert Hz to Mel scale
+    }
 
-  //   // Helper function to convert Mel scale to frequency
-  //   double melToHz(double mel) {
-  //     return 700 * (pow(10, mel / 2595) - 1); // Convert Mel scale to Hz
-  //   }
+    // Helper function to convert Mel scale to frequency
+    double melToHz(double mel) {
+      return 700 * (pow(10, mel / 2595) - 1); // Convert Mel scale to Hz
+    }
 
-  //   // Create filterbank
-  //   var melFilters = List<Float64List>.generate(numFilters, (i) => Float64List(fftSize ~/ 2 + 1));
+    // Create filterbank
+    var melFilters = List<Float64List>.generate(numFilters, (i) => Float64List(fftSize ~/ 2 + 1));
 
-  //   // Define the low and high frequency limits
-  //   double lowFreqMel = hzToMel(0); // Lowest frequency (0 Hz)
-  //   double highFreqMel = hzToMel(sampleRate / 2); // Nyquist frequency (half of sample rate)
+    // Define the low and high frequency limits
+    double lowFreqMel = hzToMel(0); // Lowest frequency (0 Hz)
+    double highFreqMel = hzToMel(sampleRate / 2); // Nyquist frequency (half of sample rate)
 
-  //   // Compute equally spaced Mel points
-  //   var melPoints = List<double>.generate(numFilters + 2, (i) {
-  //     return lowFreqMel + i * (highFreqMel - lowFreqMel) / (numFilters + 1);
-  //   });
+    // Compute equally spaced Mel points
+    var melPoints = List<double>.generate(numFilters + 2, (i) {
+      return lowFreqMel + i * (highFreqMel - lowFreqMel) / (numFilters + 1);
+    });
 
-  //   // Convert Mel points back to Hz
-  //   var hzPoints = melPoints.map(melToHz).toList();
+    // Convert Mel points back to Hz
+    var hzPoints = melPoints.map(melToHz).toList();
 
-  //   // Convert Hz points to FFT bin numbers
-  //   var binPoints = hzPoints.map((hz) {
-  //     return ((fftSize + 1) * hz / sampleRate).floor();
-  //   }).toList();
+    // Convert Hz points to FFT bin numbers
+    var binPoints = hzPoints.map((hz) {
+      return ((fftSize + 1) * hz / sampleRate).floor();
+    }).toList();
 
-  //   // Fill the Mel filterbank with triangular filters
-  //   for (int i = 1; i < numFilters + 1; i++) {
-  //     for (int j = binPoints[i - 1]; j < binPoints[i]; j++) {
-  //       melFilters[i - 1][j] = (j - binPoints[i - 1]) / (binPoints[i] - binPoints[i - 1]);
-  //     }
-  //     for (int j = binPoints[i]; j < binPoints[i + 1]; j++) {
-  //       melFilters[i - 1][j] = (binPoints[i + 1] - j) / (binPoints[i + 1] - binPoints[i]);
-  //     }
-  //   }
+    // Fill the Mel filterbank with triangular filters
+    for (int i = 1; i < numFilters + 1; i++) {
+      for (int j = binPoints[i - 1]; j < binPoints[i]; j++) {
+        melFilters[i - 1][j] = (j - binPoints[i - 1]) / (binPoints[i] - binPoints[i - 1]);
+      }
+      for (int j = binPoints[i]; j < binPoints[i + 1]; j++) {
+        melFilters[i - 1][j] = (binPoints[i + 1] - j) / (binPoints[i + 1] - binPoints[i]);
+      }
+    }
 
-  //   return melFilters;
-  // }
+    return melFilters;
+  }
 
-  // List<double> applyMelFilterbank(List<double> stftFrame, List<Float64List> melFilters) {
-  //   var melEnergies = List<double>.filled(melFilters.length, 0.0);
+  List<double> applyMelFilterbank(List<double> stftFrame, List<Float64List> melFilters) {
+    var melEnergies = List<double>.filled(melFilters.length, 0.0);
 
-  //   for (int i = 0; i < melFilters.length; i++) {
-  //     melEnergies[i] = dot(melFilters[i], stftFrame);
-  //   }
+    for (int i = 0; i < melFilters.length; i++) {
+      melEnergies[i] = dot(melFilters[i], stftFrame);
+    }
 
-  //   return melEnergies;
-  // }
+    return melEnergies;
+  }
 
-  // double dot(List<double> vectorA, List<double> vectorB) {
-  //   if (vectorA.length != vectorB.length) {
-  //     throw Exception('Vector lengths must be equal for dot product');
-  //   }
+  double dot(List<double> vectorA, List<double> vectorB) {
+    if (vectorA.length != vectorB.length) {
+      throw Exception('Vector lengths must be equal for dot product');
+    }
 
-  //   double result = 0.0;
-  //   for (int i = 0; i < vectorA.length; i++) {
-  //     result += vectorA[i] * vectorB[i];
-  //   }
-  //   return result;
-  // }
+    double result = 0.0;
+    for (int i = 0; i < vectorA.length; i++) {
+      result += vectorA[i] * vectorB[i];
+    }
+    return result;
+  }
 
-  // List<double> dct(List<double> input, int numCoefficients) {
-  //   int N = input.length;
-  //   List<double> output = List<double>.filled(numCoefficients, 0.0);
+  List<double> dct(List<double> input, int numCoefficients) {
+    int N = input.length;
+    List<double> output = List<double>.filled(numCoefficients, 0.0);
 
-  //   for (int k = 0; k < numCoefficients; k++) {
-  //     double sum = 0.0;
-  //     for (int n = 0; n < N; n++) {
-  //       sum += input[n] * cos((pi / N) * (n + 0.5) * k);
-  //     }
-  //     output[k] = sum;
-  //   }
+    for (int k = 0; k < numCoefficients; k++) {
+      double sum = 0.0;
+      for (int n = 0; n < N; n++) {
+        sum += input[n] * cos((pi / N) * (n + 0.5) * k);
+      }
+      output[k] = sum;
+    }
 
-  //   return output;
-  // }
+    return output;
+  }
 
-  // List<double> computeMFCC(List<int> audioBytes, int sampleRate, int numCoefficients) {
-  //   var audioSignal = normalizeAudioData(audioBytes);
+  List<double> computeMFCC(List<int> audioBytes, int sampleRate, int numCoefficients) {
+    // Normalisasi data audio
+    var audioSignal = normalizeAudioData(audioBytes);
 
-  //   final chunkSize = 512;
-  //   final stft = STFT(chunkSize, Window.hanning(chunkSize));
-  //   final spectrogram = <Float64List>[];
+    // Parameter untuk STFT
+    final chunkSize = 512;
+    final stft = STFT(chunkSize, Window.hanning(chunkSize));
+    final spectrogram = <Float64List>[];
 
-  //   stft.run(audioSignal, (Float64x2List freq) {
-  //     final magnitudes = freq.discardConjugates().magnitudes();
-  //     spectrogram.add(magnitudes);
-  //   });
+    // Jalankan STFT pada sinyal audio
+    stft.run(audioSignal, (Float64x2List freq) {
+      final magnitudes = freq.discardConjugates().magnitudes();
+      spectrogram.add(magnitudes);
+    });
 
-  //   var melFilters = melFilterbank(26, chunkSize, sampleRate);
-  //   var melSpectrogram = <List<double>>[];
-  //   for (var frame in spectrogram) {
-  //     var melEnergies = applyMelFilterbank(frame, melFilters);
-  //     melSpectrogram.add(melEnergies);
-  //   }
+    // Bangun filterbank Mel
+    var melFilters = melFilterbank(26, chunkSize, sampleRate);
 
-  //   for (var i = 0; i < melSpectrogram.length; i++) {
-  //     for (var j = 0; j < melSpectrogram[i].length; j++) {
-  //       melSpectrogram[i][j] = log(melSpectrogram[i][j] + 1e-10);
-  //     }
-  //   }
+    // Mel spectrogram
+    var melSpectrogram = <List<double>>[];
+    for (var frame in spectrogram) {
+      var melEnergies = applyMelFilterbank(frame, melFilters);
+      melSpectrogram.add(melEnergies);
+    }
+    // Log energi Mel
+    for (var i = 0; i < melSpectrogram.length; i++) {
+      for (var j = 0; j < melSpectrogram[i].length; j++) {
+        melSpectrogram[i][j] = log(melSpectrogram[i][j] + 1e-10);
+      }
+    }
 
-  //   var mfccList = <double>[];
-  //   for (var frame in melSpectrogram) {
-  //     var dctCoeffs = dct(frame, numCoefficients);
-  //     mfccList.addAll(dctCoeffs);
-  //   }
+    // Hitung MFCC untuk setiap frame
+    var mfccFrames = <List<double>>[];
+    for (var frame in melSpectrogram) {
+      var dctCoeffs = dct(frame, numCoefficients);
+      mfccFrames.add(dctCoeffs);
+    }
 
-  //   return mfccList;
-  // }
+    // Inisialisasi daftar untuk menyimpan rata-rata koefisien
+    var averageMFCC = List<double>.filled(numCoefficients, 0.0);
+
+    // Hitung rata-rata untuk setiap koefisien
+    for (var i = 0; i < numCoefficients; i++) {
+      double sum = 0.0;
+      for (var frame in mfccFrames) {
+        sum += frame[i];
+      }
+      averageMFCC[i] = sum / mfccFrames.length;
+    }
+
+    return averageMFCC;
+  }
+
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
   // ================================================
 
@@ -274,26 +299,6 @@ class _SoundRecorderState extends State<SoundRecorder> {
     if (maxAbsVal > 0) {
       audioList = audioList.map((v) => v / maxAbsVal).toList();
     }
-
-    // FFT to calculate dominant frequency
-    final fft = FFT(audioList.length);
-    final freqs = fft.realFft(audioList);
-
-    // Spectral magnitude
-    List<double> freqsDouble = freqs.map((f) => sqrt(f.x * f.x + f.y * f.y)).toList();
-    double maxAmplitude = freqsDouble.reduce((curr, next) => curr.abs() > next.abs() ? curr : next);
-    int maxFreqIndex = freqsDouble.indexOf(maxAmplitude);
-
-    // Dominant frequency calculation
-    double dominantFreq = (maxFreqIndex * sampleRate) / (audioList.length / 2); // Divide by 2 for FFT symmetry
-
-    // Decibel calculation
-    double minAmplitude = 1e-10;
-    maxAmplitude = maxAmplitude.abs();
-    if (maxAmplitude < minAmplitude) {
-      maxAmplitude = minAmplitude;
-    }
-    double decibel = 20 * log(maxAmplitude) / log(10);
 
     // MFCC Calculation using Flutter Sound Processing
     final flutterSoundProcessingPlugin = FlutterSoundProcessing();
@@ -328,9 +333,6 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
     // Return the extracted features as a map
     return {
-      'frequency': dominantFreq,
-      'amplitude': maxAmplitude,
-      'decibel': decibel,
       'mfcc': averageMFCC,
     };
   }
@@ -358,10 +360,6 @@ class _SoundRecorderState extends State<SoundRecorder> {
     for (var audioElement in xmlDoc.findAllElements('Audio')) {
       // Ubah label dari string menjadi integer
       int label = int.parse(audioElement.findElements('Label').first.text);
-      
-      double frequency = double.parse(audioElement.findElements('Frequency').first.text);
-      double amplitude = double.parse(audioElement.findElements('Amplitude').first.text);
-      double decibel = double.parse(audioElement.findElements('Decibel').first.text);
       List<double> mfcc = audioElement.findElements('MFCC')
           .map((e) => double.parse(e.text))
           .toList();
@@ -369,9 +367,6 @@ class _SoundRecorderState extends State<SoundRecorder> {
       trainingData.add({
         'label': label,  // Sekarang label disimpan sebagai integer
         'features': {
-          'frequency': frequency,
-          'amplitude': amplitude,
-          'decibel': decibel,
           'mfcc': mfcc,
         }
       });
@@ -406,9 +401,11 @@ class _SoundRecorderState extends State<SoundRecorder> {
       final audioElement = xml.XmlElement(xml.XmlName('Audio'));
 
       audioElement.children.add(xml.XmlElement(xml.XmlName('Label'), [], [xml.XmlText(audioData['label'].toString())]));
-      audioElement.children.add(xml.XmlElement(xml.XmlName('Frequency'), [], [xml.XmlText(audioData['features']['frequency'].toString())]));
-      audioElement.children.add(xml.XmlElement(xml.XmlName('Amplitude'), [], [xml.XmlText(audioData['features']['amplitude'].toString())]));
-      audioElement.children.add(xml.XmlElement(xml.XmlName('Decibel'), [], [xml.XmlText(audioData['features']['decibel'].toString())]));
+      // audioElement.children.add(xml.XmlElement(xml.XmlName('Frequency'), [], [xml.XmlText(audioData['features']['frequency'].toString())]));
+      // audioElement.children.add(xml.XmlElement(xml.XmlName('Amplitude'), [], [xml.XmlText(audioData['features']['amplitude'].toString())]));
+      // audioElement.children.add(xml.XmlElement(xml.XmlName('Decibel'), [], [xml.XmlText(audioData['features']['decibel'].toString())]));
+      // audioElement.children.add(xml.XmlElement(xml.XmlName('Amplitude_flutter_sound'), [], [xml.XmlText(audioData['features']['amplitude_flutter_sound'].toString())]));
+      // audioElement.children.add(xml.XmlElement(xml.XmlName('Decibel_flutter_sound'), [], [xml.XmlText(audioData['features']['decibel_flutter_sound'].toString())]));
       List mfccValues = audioData['features']['mfcc'].toList();
       for (var mfcc in mfccValues) {
         audioElement.children.add(xml.XmlElement(xml.XmlName('MFCC'), [], [xml.XmlText(mfcc.toString())]));
@@ -423,7 +420,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
   }
 
   Future<void> loadAndAppendFeaturesFromAssets(List<Map<String, dynamic>> audioStore, String filePath) async {
-    for (int i = 1; i <= 20; i++) {
+    for (int i = 1; i <= 14; i++) {
       // Muat file audio dari assets
       ByteData audioData = await rootBundle.load('assets/test$i.wav');
 
@@ -606,14 +603,13 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
   // Neural network to replace SVM training
   void _trainANN(List<Map<String, dynamic>> trainingData) {
+    var stopwatchTrain = Stopwatch()..start();
     int fixedMfccLength = 40;
-    int numFeatures = fixedMfccLength + 2;
+    // int numFeatures = fixedMfccLength + 2;
     var scale = ScaleDouble.ZERO_TO_ONE;
 
     var samples = trainingData.map((sample) {
       List<double> features = [
-        sample['features']['amplitude'],
-        sample['features']['decibel'],
         ..._getFixedLengthMFCCs(sample['features']['mfcc'], fixedMfccLength)
       ];
       int label = sample['label'];
@@ -629,7 +625,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
     var activationFunction = ActivationFunctionSigmoid();
     var ann = ANN(
       scale,
-      LayerFloat32x4(numFeatures, true, ActivationFunctionLinear()),
+      LayerFloat32x4(fixedMfccLength, true, ActivationFunctionLinear()),
       [HiddenLayerConfig(10, true, activationFunction)],
       LayerFloat32x4(1, false, activationFunction)
     );
@@ -638,12 +634,15 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
     var backpropagation = Backpropagation(ann, sampleSet);
     var targetError = backpropagation.trainUntilGlobalError(
-      targetGlobalError: 0.001,
-      maxEpochs: 1000,
+      targetGlobalError: 0.01,
+      maxEpochs: 800,
       maxRetries: 10
     );
 
     print('Training complete. Achieved target error: $targetError');
+    stopwatchTrain.stop();
+
+    print("Prediction time Train: ${stopwatchTrain.elapsedMilliseconds} ms");
 
     // Menghitung global error dan detail prediksi
     var globalError = ann.computeSamplesGlobalError(sampleSet.samples);
@@ -693,14 +692,13 @@ class _SoundRecorderState extends State<SoundRecorder> {
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   Future<void> _startRecording() async {
     try {
-      if (recordingCount >= 8) {
+      if (recordingCount >= 6) {
         print('maximum recording reached.');
         return;
       }
 
       final directory = await getExternalStorageDirectory();
       _filePath = '${directory?.path}/audio_record.wav';
-      print('Audio saved to: $_filePath');
 
       var status = await Permission.microphone.request();
       if (!status.isGranted) {
@@ -721,10 +719,11 @@ class _SoundRecorderState extends State<SoundRecorder> {
           setState(() {
             // Konversi dB ke amplitude
             _amplitude = pow(10, (event.decibels! / 20)) as double;
+            // _decibel = event.decibels!;
             
             // Update flags berdasarkan threshold
-            _isAmplitudeHigh = _amplitude > 1000;
-            _isAmplitudeLow = _amplitude >= 50 && _amplitude <= 400;
+            _isAmplitudeHigh = _amplitude > 1200;
+            _isAmplitudeLow = _amplitude >= 50 && _amplitude <= 600;
             
             // Debug print
             if (_isAmplitudeHigh) {
@@ -778,6 +777,8 @@ class _SoundRecorderState extends State<SoundRecorder> {
 
       // Kondisi untuk menyimpan rekaman berdasarkan amplitudo
       bool shouldSaveRecording = false;
+      
+      print('Amplitude: $_amplitude');
 
       // Amplitudo rendah pada indeks rekaman genap
       if (_isAmplitudeLow && recordingCount % 2 == 0) {
@@ -803,12 +804,13 @@ class _SoundRecorderState extends State<SoundRecorder> {
           audioStore.add({
             'label': 1,
             'features': recordedFeatures,
-            'amplitude': _amplitude,  // Menyimpan nilai amplitude
-            'isHigh': _isAmplitudeHigh,
-            'isLow': _isAmplitudeLow
+            // 'amplitude_flutter_sound': _amplitude,  // Menyimpan nilai amplitude
+            // 'decibel_flutter_sound': _decibel,
+            // 'isHigh': _isAmplitudeHigh,
+            // 'isLow': _isAmplitudeLow
           });
         }
-
+        var stopwatchEkstrakRecord = Stopwatch()..start();
         // Save features to XML
         final directory = await getExternalStorageDirectory();
         if (directory != null) {
@@ -816,13 +818,18 @@ class _SoundRecorderState extends State<SoundRecorder> {
           await saveFeaturesToXml(audioStore, filePath);
           print('Audio features saved successfully.');
         }
+        stopwatchEkstrakRecord.stop();
+        print("Prediction time Ekstrak Record: ${stopwatchEkstrakRecord.elapsedMilliseconds} ms");
 
-        if (recordingCount == 8) {
+        if (recordingCount == 6) {
+          var stopwatchAudio = Stopwatch()..start();
           final directory = await getExternalStorageDirectory();
           if (directory != null) {
             String filePath = '${directory.path}/audio_features.xml';
             await loadAndAppendFeaturesFromAssets([], filePath);
             print('Audio features from assets saved successfully.');
+            stopwatchAudio.stop();
+            print("Prediction time Ekstrak Other Audio: ${stopwatchAudio.elapsedMilliseconds} ms");
 
             await loadFeaturesFromXml();
             _trainANN(trainingData);
@@ -997,7 +1004,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
                     SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(8, (index) {
+                      children: List.generate(6, (index) {
                         return Container(
                           margin: EdgeInsets.symmetric(horizontal: 4),
                           width: 20,
@@ -1018,7 +1025,7 @@ class _SoundRecorderState extends State<SoundRecorder> {
                     ),
                     SizedBox(height: 8),
                     Text(
-                      '${recordingCount}/8 rekaman',
+                      '${recordingCount}/6 rekaman',
                       style: TextStyle(
                         fontSize: 14,
                         color: Colors.deepPurple[700],

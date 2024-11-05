@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.5.2
+  sdk: ">=3.4.0 <4.0.0"
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -69,6 +69,8 @@ flutter:
 
   # To add assets to your application, add an assets section, like this:
   assets:
+    - assets/labels.txt
+    - assets/soundclassifier.tflite
     - assets/test1.wav
     - assets/test2.wav
     - assets/test3.wav
@@ -83,12 +85,12 @@ flutter:
     - assets/test12.wav
     - assets/test13.wav
     - assets/test14.wav
-    - assets/test15.wav
-    - assets/test16.wav
-    - assets/test17.wav
-    - assets/test18.wav
-    - assets/test19.wav
-    - assets/test20.wav
+    # - assets/test15.wav
+    # - assets/test16.wav
+    # - assets/test17.wav
+    # - assets/test18.wav
+    # - assets/test19.wav
+    # - assets/test20.wav
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see

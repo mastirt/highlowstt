@@ -239,11 +239,10 @@ class _SoundAnalyzerState extends State<SoundAnalyzerSvm> {
   // ============== EKSTRAKSI FITUR =================
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   Future<Map<String, dynamic>> extractAudioFeatures(String filePath) async {
-    // Read the file
     File file = File(filePath);
     Uint8List audioData = await file.readAsBytes();
 
-    // Convert Uint8List to List<int> (assuming 16-bit PCM)
+    // Convert Uint8List to List<int> assuming 16-bit PCM
     List<int> audioListInt = [];
     for (int i = 0; i < audioData.length; i += 2) {
       int value = (audioData[i + 1] << 8) | audioData[i];
@@ -251,7 +250,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzerSvm> {
       audioListInt.add(value);
     }
 
-    // Convert to List<double>
+    // Convert List<int> to List<double>
     List<double> audioList = audioListInt.map((e) => e.toDouble()).toList();
 
     // Remove DC component (mean removal)
@@ -264,24 +263,22 @@ class _SoundAnalyzerState extends State<SoundAnalyzerSvm> {
       audioList = audioList.map((v) => v / maxAbsVal).toList();
     }
 
-    // FFT to calculate dominant frequency
+    // Perform FFT to calculate dominant frequency
     final fft = FFT(audioList.length);
     final freqs = fft.realFft(audioList);
 
-    // Spectral magnitude
-    List<double> freqsDouble = freqs.map((f) => sqrt(f.x * f.x + f.y * f.y)).toList();
-    double maxAmplitude = freqsDouble.reduce((curr, next) => curr.abs() > next.abs() ? curr : next);
-    int maxFreqIndex = freqsDouble.indexOf(maxAmplitude);
+    // Calculate spectral magnitude
+    List<double> magnitudes = freqs.map((f) => sqrt(f.x * f.x + f.y * f.y)).toList();
+    double maxAmplitude = magnitudes.reduce((curr, next) => curr > next ? curr : next);
+    int maxFreqIndex = magnitudes.indexOf(maxAmplitude);
 
-    // Dominant frequency calculation
-    double dominantFreq = (maxFreqIndex * 16000) / (audioList.length); // Divide by 2 for FFT symmetry
+    // Calculate dominant frequency
+    double samplingRate = 16000; // in Hz
+    double dominantFreq = (maxFreqIndex * samplingRate) / (audioList.length * 2);
 
-    // Decibel calculation
+    // Calculate decibel level
     double minAmplitude = 1e-10;
-    maxAmplitude = maxAmplitude.abs();
-    if (maxAmplitude < minAmplitude) {
-      maxAmplitude = minAmplitude;
-    }
+    maxAmplitude = maxAmplitude < minAmplitude ? minAmplitude : maxAmplitude;
     double decibel = 20 * log(maxAmplitude) / log(10);
 
     // MFCC Calculation (13 coefficients as an example)

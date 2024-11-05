@@ -8,10 +8,12 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'dart:async';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
 import 'package:google_speech/google_speech.dart';
 import 'package:fftea/fftea.dart';
 import 'package:eneural_net/eneural_net.dart';
 import 'package:flutter_sound_processing/flutter_sound_processing.dart';
+import 'dart:core';
 
 const int bufferSize = 7839;
 const int sampleRate = 16000;
@@ -44,16 +46,16 @@ class SoundAnalyzerAnn extends StatefulWidget {
 
 class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
-  final speechToText = SpeechToText.viaApiKey("AIzaSyDx5fZpE0z1QxYV7mwN1cvxig7tUvzw4Xc");
+  final speechToText = SpeechToText.viaApiKey("AIzaSyBgM6CzvKTZVEit_d-kOxjfstTW4OWe6ac");
   final config = RecognitionConfig(
     encoding: AudioEncoding.LINEAR16,
-    model: RecognitionModel.basic,
+    model: RecognitionModel.command_and_search,
     enableAutomaticPunctuation: true,
     sampleRateHertz: 16000,
     languageCode: 'id-ID',
   );
   bool _isRecording = false;
-  double _frequency = 0.0;
+  // double _frequency = 0.0;
   double _amplitude = 0.0;
   double _decibel = 0.0;
   bool _isAmplitudeHigh = false;
@@ -84,6 +86,181 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
     await _recorder.openRecorder();
     _recorder.setSubscriptionDuration(Duration(milliseconds: 2000));
   }
+  // =================== MFCC ======================
+  //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  Future<String> _extractWaveform(String inputPath) async {
+    String outputPath = '${inputPath}_waveform.pcm';
+    String command = '-y -i "$inputPath" -ar 16000 -ac 1 -f s16le "$outputPath"';
+
+    await FFmpegKit.execute(command).then((session) async {
+      final returnCode = await session.getReturnCode();
+      if (returnCode != null && returnCode.isValueSuccess()) {
+        print('Waveform extracted successfully for $inputPath');
+      } else {
+        final output = await session.getOutput();
+        print('Error extracting waveform: $output');
+      }
+    });
+
+    return outputPath;
+  }
+
+  Future<List<int>> _getAudioBytes(String filePath) async {
+    final audioFile = File(filePath);
+    if (!await audioFile.exists()) {
+      throw Exception("Audio file not found at path: $filePath");
+    }
+    final audioData = await audioFile.readAsBytes();
+    return audioData;
+  }
+
+  List<double> normalizeAudioData(List<int> audioBytes) {
+    List<double> normalizedData = [];
+    for (int i = 0; i < audioBytes.length - 1; i += 2) {
+      int sample = audioBytes[i] | (audioBytes[i + 1] << 8);
+      if (sample > 32767) sample -= 65536;
+      normalizedData.add(sample / 32768.0);
+    }
+    return normalizedData;
+  }
+
+  List<Float64List> melFilterbank(int numFilters, int fftSize, int sampleRate) {
+    // Helper function to convert frequency to Mel scale
+    double hzToMel(double hz) {
+      return 2595 * log(1 + hz / 700) / ln10; // Convert Hz to Mel scale
+    }
+
+    // Helper function to convert Mel scale to frequency
+    double melToHz(double mel) {
+      return 700 * (pow(10, mel / 2595) - 1); // Convert Mel scale to Hz
+    }
+
+    // Create filterbank
+    var melFilters = List<Float64List>.generate(numFilters, (i) => Float64List(fftSize ~/ 2 + 1));
+
+    // Define the low and high frequency limits
+    double lowFreqMel = hzToMel(0); // Lowest frequency (0 Hz)
+    double highFreqMel = hzToMel(sampleRate / 2); // Nyquist frequency (half of sample rate)
+
+    // Compute equally spaced Mel points
+    var melPoints = List<double>.generate(numFilters + 2, (i) {
+      return lowFreqMel + i * (highFreqMel - lowFreqMel) / (numFilters + 1);
+    });
+
+    // Convert Mel points back to Hz
+    var hzPoints = melPoints.map(melToHz).toList();
+
+    // Convert Hz points to FFT bin numbers
+    var binPoints = hzPoints.map((hz) {
+      return ((fftSize + 1) * hz / sampleRate).floor();
+    }).toList();
+
+    // Fill the Mel filterbank with triangular filters
+    for (int i = 1; i < numFilters + 1; i++) {
+      for (int j = binPoints[i - 1]; j < binPoints[i]; j++) {
+        melFilters[i - 1][j] = (j - binPoints[i - 1]) / (binPoints[i] - binPoints[i - 1]);
+      }
+      for (int j = binPoints[i]; j < binPoints[i + 1]; j++) {
+        melFilters[i - 1][j] = (binPoints[i + 1] - j) / (binPoints[i + 1] - binPoints[i]);
+      }
+    }
+
+    return melFilters;
+  }
+
+  List<double> applyMelFilterbank(List<double> stftFrame, List<Float64List> melFilters) {
+    var melEnergies = List<double>.filled(melFilters.length, 0.0);
+
+    for (int i = 0; i < melFilters.length; i++) {
+      melEnergies[i] = dot(melFilters[i], stftFrame);
+    }
+
+    return melEnergies;
+  }
+
+  double dot(List<double> vectorA, List<double> vectorB) {
+    if (vectorA.length != vectorB.length) {
+      throw Exception('Vector lengths must be equal for dot product');
+    }
+
+    double result = 0.0;
+    for (int i = 0; i < vectorA.length; i++) {
+      result += vectorA[i] * vectorB[i];
+    }
+    return result;
+  }
+
+  List<double> dct(List<double> input, int numCoefficients) {
+    int N = input.length;
+    List<double> output = List<double>.filled(numCoefficients, 0.0);
+
+    for (int k = 0; k < numCoefficients; k++) {
+      double sum = 0.0;
+      for (int n = 0; n < N; n++) {
+        sum += input[n] * cos((pi / N) * (n + 0.5) * k);
+      }
+      output[k] = sum;
+    }
+
+    return output;
+  }
+
+  List<double> computeMFCC(List<int> audioBytes, int sampleRate, int numCoefficients) {
+    // Normalisasi data audio
+    var audioSignal = normalizeAudioData(audioBytes);
+
+    // Parameter untuk STFT
+    final chunkSize = 512;
+    final stft = STFT(chunkSize, Window.hanning(chunkSize));
+    final spectrogram = <Float64List>[];
+
+    // Jalankan STFT pada sinyal audio
+    stft.run(audioSignal, (Float64x2List freq) {
+      final magnitudes = freq.discardConjugates().magnitudes();
+      spectrogram.add(magnitudes);
+    });
+
+    // Bangun filterbank Mel
+    var melFilters = melFilterbank(26, chunkSize, sampleRate);
+
+    // Mel spectrogram
+    var melSpectrogram = <List<double>>[];
+    for (var frame in spectrogram) {
+      var melEnergies = applyMelFilterbank(frame, melFilters);
+      melSpectrogram.add(melEnergies);
+    }
+    // Log energi Mel
+    for (var i = 0; i < melSpectrogram.length; i++) {
+      for (var j = 0; j < melSpectrogram[i].length; j++) {
+        melSpectrogram[i][j] = log(melSpectrogram[i][j] + 1e-10);
+      }
+    }
+
+    // Hitung MFCC untuk setiap frame
+    var mfccFrames = <List<double>>[];
+    for (var frame in melSpectrogram) {
+      var dctCoeffs = dct(frame, numCoefficients);
+      mfccFrames.add(dctCoeffs);
+    }
+
+    // Inisialisasi daftar untuk menyimpan rata-rata koefisien
+    var averageMFCC = List<double>.filled(numCoefficients, 0.0);
+
+    // Hitung rata-rata untuk setiap koefisien
+    for (var i = 0; i < numCoefficients; i++) {
+      double sum = 0.0;
+      for (var frame in mfccFrames) {
+        sum += frame[i];
+      }
+      averageMFCC[i] = sum / mfccFrames.length;
+    }
+
+    return averageMFCC;
+  }
+
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  // ================================================
+
   // ============== EKSTRAKSI FITUR =================
   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   Future<Map<String, dynamic>> extractAudioFeatures(String filePath) async {
@@ -166,60 +343,13 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
         }
       }
 
-      // Convert Uint8List to List<int> (assuming 16-bit PCM)
-      List<int> soundListInt = [];
-      for (int i = 0; i < audioData.length; i += 2) {
-        int value = (audioData[i + 1] << 8) | audioData[i];
-        if (value >= 0x8000) value -= 0x10000;
-        soundListInt.add(value);
-      }
-
-      // Convert to List<double>
-      List<double> soundList = soundListInt.map((e) => e.toDouble()).toList();
-
-      // Remove DC component (mean removal)
-      double soundMean = soundList.reduce((a, b) => a + b) / soundList.length;
-      soundList = soundList.map((v) => v - soundMean).toList();
-
-      // Normalize amplitude
-      double maxAbsValSound = soundList.map((v) => v.abs()).reduce((a, b) => a > b ? a : b);
-      if (maxAbsValSound > 0) {
-        soundList = soundList.map((v) => v / maxAbsValSound).toList();
-      }
-
-      // FFT to calculate dominant frequency
-      final fft = FFT(soundList.length);
-      final freqs = fft.realFft(soundList);
-
-      // Spectral magnitude
-      List<double> freqsDouble = freqs.map((f) => sqrt(f.x * f.x + f.y * f.y)).toList();
-      double maxAmplitude = freqsDouble.reduce((curr, next) => curr.abs() > next.abs() ? curr : next);
-      int maxFreqIndex = freqsDouble.indexOf(maxAmplitude);
-
-      // Dominant frequency calculation
-      double dominantFreq = (maxFreqIndex * sampleRate) / (soundList.length / 2); // Divide by 2 for FFT symmetry
-
-      // Decibel calculation
-      double minAmplitude = 1e-10;
-      maxAmplitude = maxAmplitude.abs();
-      if (maxAmplitude < minAmplitude) {
-        maxAmplitude = minAmplitude;
-      }
-      double decibel = 20 * log(maxAmplitude) / log(10);
-
       return {
-        'frequency': dominantFreq,
-        'amplitude': maxAmplitude,
-        'decibel': decibel,
         'mfcc': averageMFCC,
       };
     } catch (e, stackTrace) {
       print('Error in extractAudioFeatures: $e');
       print('Stack trace: $stackTrace');
       return {
-        'frequency': 0.0,
-        'amplitude': 0.0,
-        'decibel': 0.0,
         'mfcc': List.filled(mfcc, 0.0),
       };
     }
@@ -325,6 +455,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
 
         print('File audio berhasil disalin ke: $newPath');
         
+        var stopwatchSTT = Stopwatch()..start();
         final audio = await _getAudioContent(newPath);
         final response = await speechToText.recognize(config, audio);
         String? detectedText = response.results
@@ -332,9 +463,12 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
             .join(' ');
 
         print('Kata yang terdeteksi: $detectedText');
+        stopwatchSTT.stop();
+        print("Prediction time STT: ${stopwatchSTT.elapsedMilliseconds} ms");
 
         if (detectedText.contains('tolong') || detectedText.contains('help') || detectedText.contains('aw') || detectedText.contains('aduh')) {
           print('Terdeteksi kata: $detectedText');
+          var stopwatchNN = Stopwatch()..start();
 
           _trainedANN = (await _loadModelFromFile('voice_recognition_model.json'))!;
           int fixedMfccLength = 40;
@@ -342,8 +476,8 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
 
           List<double> newFeatures = [
             // _copy_features['frequency'] ?? 0.0,
-            _copy_features['amplitude'] ?? 0.0,
-            _copy_features['decibel'] ?? 0.0,
+            // _copy_features['amplitude'] ?? 0.0,
+            // _copy_features['decibel'] ?? 0.0,
             ..._getFixedLengthMFCCs(_copy_features['mfcc'], fixedMfccLength)
           ];
 
@@ -373,6 +507,8 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
           if ((output[0] - label).abs() < 0.15 && predictedLabel == label) { // Using threshold for floating point comparison
             predictionMatch = true;
           }
+          stopwatchNN.stop();
+          print("Prediction time NN: ${stopwatchNN.elapsedMilliseconds} ms");
 
           setState(() {
             _comparisonResult['detectedText'] = detectedText;
@@ -380,7 +516,7 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
           });
 
           // Reset setelah menampilkan hasil
-          Future.delayed(Duration(seconds: 2), () {
+          Future.delayed(Duration(seconds: 1), () {
             setState(() {
               _comparisonResult = {'detectedText': '', 'isMatching': false};
 
@@ -394,6 +530,18 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
       }
     } catch (e) {
       print('Error saat memproses dan membandingkan file audio: $e');
+    } finally {
+      // Cleanup temp file
+      try {
+        final directory = await getExternalStorageDirectory();
+        final newPath = path.join(directory!.path, 'processed_audio.wav');
+        final tempFile = File(newPath);
+        if (await tempFile.exists()) {
+          await tempFile.delete();
+        }
+      } catch (e) {
+        print('Error cleaning up temp file: $e');
+      }
     }
   }
   // ================================================
@@ -413,21 +561,22 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
       );
 
       _recorder.onProgress!.listen((event) async {
-        if (_filePath != null) {
+        if (_filePath != null ) {
           try {
+            var stopwatchHL = Stopwatch()..start();
             Map<String, dynamic> realtime_features = await extractAudioFeatures(_filePath!);
             setState(() {
               _amplitude = pow(10, (event.decibels! / 20)) as double;
               _decibel = event.decibels!;
-              _frequency = realtime_features['frequency'];
 
-              _isAmplitudeHigh = _amplitude > 1000;
-              _isAmplitudeLow = _amplitude >= 50 && _amplitude <= 200;
+              _isAmplitudeHigh = _amplitude > 1200;
+              _isAmplitudeLow = _amplitude >= 50 && _amplitude <= 600;
 
               if (_isAmplitudeHigh || _isAmplitudeLow) {
                 if (_isAmplitudeHigh) {
                   print('Amplitude tinggi terdeteksi.');
                 }
+
                 if (_isAmplitudeLow) {
                   print('Amplitude rendah terdeteksi.');
                 }
@@ -435,17 +584,17 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
                 processAndCompareAudio();
               }
             });
+            stopwatchHL.stop();
+            print("Prediction time HL: ${stopwatchHL.elapsedMilliseconds} ms");
           } catch (e) {
             print('Error extracting audio features: $e');
           }
         }
       });
-
       setState(() {
         _isRecording = true;
       });
-
-      _recordingTimer = Timer.periodic(Duration(milliseconds: 2500), (timer) async {
+      _recordingTimer = Timer.periodic(Duration(milliseconds: 10000), (timer) async {
         await _restartRecording();
       });
     } catch (e) {
@@ -454,27 +603,24 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
   }
 
   Future<void> _restartRecording() async {
-    try {
-      await _recorder.stopRecorder();
+    await _recorder.stopRecorder();
 
-      if (_filePath != null) {
-        final file = File(_filePath!);
-        if (await file.exists()) {
-          await file.delete();
-        }
+    if (_filePath != null) {
+      final file = File(_filePath!);
+      if (await file.exists()) {
+        await file.delete();
+        // print('Deleted old recording: $_filePath');
       }
-
-      final directory = await getExternalStorageDirectory();
-      _filePath = '${directory?.path}/audio_streaming.wav';
-
-      await _recorder.startRecorder(
-        toFile: _filePath,
-        codec: Codec.pcm16WAV,
-        sampleRate: sampleRate,
-      );
-    } catch (e) {
-      print('Error in restarting recorder: $e');
     }
+
+    final directory = await getExternalStorageDirectory();
+    _filePath = '${directory?.path}/audio_streaming.wav';
+    // print('Restarting recording, audio saved to: $_filePath');
+
+    await _recorder.startRecorder(
+      toFile: _filePath,
+      codec: Codec.pcm16WAV,
+    );
   }
 
   Future<void> _stopRecording() async {
@@ -526,28 +672,6 @@ class _SoundAnalyzerState extends State<SoundAnalyzerAnn> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            SizedBox(height: 20),
-            // Frequency Display
-            Card(
-              color: Colors.deepPurple[50],
-              elevation: 4,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Icon(Icons.multitrack_audio, color: Colors.deepPurple),
-                    Text(
-                      'Frekuensi: ${_frequency.toStringAsFixed(2)} Hz',
-                      style: TextStyle(fontSize: 20, color: Colors.deepPurple[700]),
-                    ),
-                  ],
-                ),
-              ),
-            ),
             SizedBox(height: 20),
             // Amplitude Display
             Card(
